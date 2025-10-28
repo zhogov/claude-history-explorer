@@ -18,6 +18,10 @@ struct Args {
     /// Show the conversation directory and exit
     #[arg(long, help = "Print the conversation directory path and exit")]
     show_dir: bool,
+
+    /// Show last messages in preview instead of first messages
+    #[arg(long, help = "Show the last messages in the fuzzy finder preview")]
+    last: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -136,7 +140,7 @@ fn main() {
     }
 
     // Create fzf input with file previews (filters out empty files)
-    let fzf_entries = create_fzf_input(&jsonl_files);
+    let fzf_entries = create_fzf_input(&jsonl_files, args.last);
 
     if fzf_entries.is_empty() {
         eprintln!(
@@ -192,19 +196,25 @@ fn find_jsonl_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn create_fzf_input(files: &[PathBuf]) -> Vec<(usize, String)> {
+fn create_fzf_input(files: &[PathBuf], show_last: bool) -> Vec<(usize, String)> {
     files
         .iter()
         .enumerate()
         .filter_map(|(idx, path)| {
-            let preview =
-                extract_preview(path).unwrap_or_else(|_| "Failed to read file".to_string());
+            let (preview, full_text) =
+                extract_preview_and_full(path, show_last).unwrap_or_else(|_| ("Failed to read file".to_string(), String::new()));
             // Skip files with empty preview (no displayable content)
             if preview.trim().is_empty() {
                 return None;
             }
             let timestamp = extract_timestamp(path).unwrap_or_else(|_| "Unknown time".to_string());
-            Some((idx, format!("[{}] {} | {}", idx, timestamp, preview)))
+
+            // Part 1: Index for parsing (machine-readable)
+            // Part 2: Display part (what user sees)
+            // Part 3: Full text (searchable but hidden)
+            // Format: INDEX<tab>DISPLAY_PART<tab>FULL_TEXT
+            let display_part = format!("[{}] {} | {}", idx, timestamp, preview);
+            Some((idx, format!("{}\t{}\t{}", idx, display_part, full_text)))
         })
         .collect()
 }
@@ -237,10 +247,10 @@ fn extract_timestamp(path: &Path) -> std::io::Result<String> {
     Ok("Unknown time".to_string())
 }
 
-fn extract_preview(path: &Path) -> std::io::Result<String> {
+fn extract_preview_and_full(path: &Path, show_last: bool) -> std::io::Result<(String, String)> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let mut preview_parts = Vec::new();
+    let mut all_parts = Vec::new();
     let mut user_messages = Vec::new();
 
     for line in reader.lines() {
@@ -254,36 +264,44 @@ fn extract_preview(path: &Path) -> std::io::Result<String> {
                 LogEntry::User { message, .. } => {
                     let text = extract_text_from_user(&message);
                     if !text.is_empty() {
-                        preview_parts.push(text.clone());
+                        all_parts.push(text.clone());
                         user_messages.push(text);
                     }
                 }
                 LogEntry::Assistant { message, .. } => {
                     let text = extract_text_from_assistant(&message);
                     if !text.is_empty() {
-                        preview_parts.push(text);
+                        all_parts.push(text);
                     }
                 }
                 _ => {}
             }
         }
-
-        if preview_parts.len() >= 3 {
-            break;
-        }
     }
 
     // Check if this is a clear-only conversation
     if is_clear_only_conversation(&user_messages) {
-        return Ok(String::new());
+        return Ok((String::new(), String::new()));
     }
 
-    let preview = preview_parts.join(" ... ");
+    // Create preview (first or last 3 messages)
+    let preview = if show_last {
+        all_parts.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join(" ... ")
+    } else {
+        all_parts.iter().take(3).cloned().collect::<Vec<_>>().join(" ... ")
+    };
+
+    // Create full text for searching (all messages)
+    let full_text = all_parts.join(" ");
+
     // Remove newlines and collapse whitespace to ensure single line
     let preview = preview.replace(['\n', '\r'], " ");
     let preview = preview.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    Ok(preview)
+    let full_text = full_text.replace(['\n', '\r'], " ");
+    let full_text = full_text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    Ok((preview, full_text))
 }
 
 fn is_clear_only_conversation(user_messages: &[String]) -> bool {
@@ -353,7 +371,14 @@ fn run_fzf(
     files: &[PathBuf],
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut child = Command::new("fzf")
-        .args(["--height", "40%", "--reverse", "--border", "--no-multi"])
+        .args([
+            "--height", "40%",
+            "--reverse",
+            "--border",
+            "--no-multi",
+            "--delimiter", "\t",  // Split fields by tab
+            "--with-nth", "2",    // Display only the second field (the pretty display)
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
@@ -378,20 +403,16 @@ fn run_fzf(
         return Err("No selection made".into());
     }
 
-    // Extract index from [idx] at the start
-    if let Some(idx_end) = selection.find(']')
-        && idx_end > 1 {
-            let idx_str = &selection[1..idx_end];
-            if let Ok(idx) = idx_str.parse::<usize>() {
-                if idx < files.len() {
-                    return Ok(files[idx].clone());
-                } else {
-                    return Err(format!("Index {} out of range", idx).into());
-                }
-            }
+    // Extract index from the first tab-separated field
+    if let Some(idx_str) = selection.split('\t').next() {
+        if let Ok(idx) = idx_str.parse::<usize>() {
+            return files.get(idx)
+                .cloned()
+                .ok_or_else(|| format!("Index {} out of range", idx).into());
         }
+    }
 
-    Err("Failed to parse selection - expected format: [index] filename | preview".into())
+    Err("Failed to parse index from fzf selection".into())
 }
 
 fn display_conversation(file_path: &Path, no_tools: bool) {
