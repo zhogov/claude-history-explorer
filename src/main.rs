@@ -384,12 +384,12 @@ fn display_entry(entry: &LogEntry, no_tools: bool) {
         }
         LogEntry::User { message, .. } => match &message.content {
             UserContent::String(text) => {
-                println!("\n{} {}", "User:".blue().bold(), text);
+                println!("{} {}", "User:".blue().bold(), text);
             }
             UserContent::Blocks(blocks) => {
                 for block in blocks {
                     if let ContentBlock::Text { text } = block {
-                        println!("\n{} {}", "User:".blue().bold(), text);
+                        println!("{} {}", "User:".blue().bold(), text);
                     }
                 }
             }
@@ -417,7 +417,7 @@ fn display_entry(entry: &LogEntry, no_tools: bool) {
             if !tool_uses.is_empty() && !has_text && !no_tools {
                 for tool_name in tool_uses {
                     println!(
-                        "\n{} <Calling Tool: {}>",
+                        "{} <Calling Tool: {}>",
                         "Assistant:".green().bold(),
                         tool_name
                     );
@@ -427,19 +427,19 @@ fn display_entry(entry: &LogEntry, no_tools: bool) {
                 for block in &message.content {
                     match block {
                         ContentBlock::Text { text } => {
-                            println!("\n{} {}", "Assistant:".green().bold(), text);
+                            println!("{} {}", "Assistant:".green().bold(), text);
                         }
                         ContentBlock::ToolUse { name, .. } => {
                             if !no_tools {
                                 println!(
-                                    "\n{} <Calling Tool: {}>",
+                                    "{} <Calling Tool: {}>",
                                     "Assistant:".green().bold(),
                                     name
                                 );
                             }
                         }
                         ContentBlock::Thinking { thinking, .. } => {
-                            println!("\n{} {}", "Thinking:".yellow().bold(), thinking);
+                            println!("{} {}", "Thinking:".yellow().bold(), thinking);
                         }
                         _ => {}
                     }
