@@ -41,9 +41,12 @@ Usage: claude-history [OPTIONS]
 
 Options:
   -t, --no-tools       Hide tool calls from the conversation output
+      --show-tools     Force display of tool calls from the conversation output
   -d, --show-dir       Print the conversation directory path and exit
   -l, --last           Show the last messages in the fuzzy finder preview
-  -r, --relative-time  Display relative time instead of absolute timestamp
+      --first          Show the first messages in the fuzzy finder preview
+  -r, --relative-time  Display relative time (e.g. "10 minutes ago")
+      --absolute-time  Display absolute timestamp
   -c, --resume         Resume the selected conversation in Claude Code
   -h, --help           Print help
 ```
@@ -101,6 +104,43 @@ claude -p "$prompt"
 The `--no-tools` flag is particularly useful here since it filters out tool
 invocations, giving you clean conversation text that's easier for Claude to
 process as context.
+
+## configuration
+
+You can set default preferences for display options in `~/.config/claude-history/config.toml`. Command-line flags will override these settings.
+
+Create the config file:
+
+```sh
+mkdir -p ~/.config/claude-history
+cat > ~/.config/claude-history/config.toml << 'EOF'
+[display]
+# Hide tool calls from output by default
+no_tools = true
+
+# Show last messages in preview by default
+last = false
+
+# Use relative time formatting by default
+relative_time = true
+EOF
+```
+
+### available options
+
+- `no_tools` (boolean): Hide tool calls from conversation output
+- `last` (boolean): Show last messages instead of first in fuzzy finder preview
+- `relative_time` (boolean): Display relative time instead of absolute timestamp
+
+### overriding config
+
+Each display option has opposing flags for explicit override:
+
+- `--no-tools` / `--show-tools`
+- `--last` / `--first`
+- `--relative-time` / `--absolute-time`
+
+For example, if your config has `no_tools = true`, you can temporarily show tools with `--show-tools`.
 
 ## filtering details
 
