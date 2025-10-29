@@ -79,6 +79,10 @@ pub enum ContentBlock {
         #[allow(dead_code)]
         signature: String,
     },
+    #[allow(dead_code)]
+    Image {
+        source: serde_json::Value,
+    },
 }
 
 /// Extract text from content blocks, used for both user and assistant messages
