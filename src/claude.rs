@@ -10,10 +10,12 @@ pub enum LogEntry {
     },
     User {
         message: UserMessage,
+        #[allow(dead_code)]
         timestamp: String,
     },
     Assistant {
         message: AssistantMessage,
+        #[allow(dead_code)]
         timestamp: String,
     },
     #[serde(rename = "file-history-snapshot")]

@@ -61,7 +61,10 @@ pub fn load_conversations(projects_dir: &Path, show_last: bool) -> Result<Vec<Co
     // Process each file once
     let mut conversations = Vec::new();
     for path in file_paths {
-        if let Some(mut conversation) = process_conversation_file(path, show_last)? {
+        // Get modification time for display
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+
+        if let Some(mut conversation) = process_conversation_file(path, show_last, modified)? {
             conversation.index = conversations.len();
             conversations.push(conversation);
         }
@@ -71,14 +74,17 @@ pub fn load_conversations(projects_dir: &Path, show_last: bool) -> Result<Vec<Co
 }
 
 /// Process a single conversation file and extract all necessary information
-fn process_conversation_file(path: PathBuf, show_last: bool) -> Result<Option<Conversation>> {
+fn process_conversation_file(
+    path: PathBuf,
+    show_last: bool,
+    modified: Option<std::time::SystemTime>,
+) -> Result<Option<Conversation>> {
     let file = File::open(&path)?;
     let reader = BufReader::new(file);
 
     let mut all_parts = Vec::new();
     let mut preview_parts = Vec::new();
     let mut user_messages = Vec::new();
-    let mut first_timestamp: Option<DateTime<Local>> = None;
     let mut seen_real_user_message = false;
     let mut skip_next_assistant = false;
 
@@ -89,21 +95,6 @@ fn process_conversation_file(path: PathBuf, show_last: bool) -> Result<Option<Co
         }
 
         if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
-            // Capture timestamp from first user or assistant message
-            if first_timestamp.is_none() {
-                let timestamp_str = match &entry {
-                    LogEntry::User { timestamp, .. } => Some(timestamp),
-                    LogEntry::Assistant { timestamp, .. } => Some(timestamp),
-                    _ => None,
-                };
-
-                if let Some(ts) = timestamp_str
-                    && let Ok(dt) = DateTime::parse_from_rfc3339(ts)
-                {
-                    first_timestamp = Some(dt.into());
-                }
-            }
-
             // Extract text content
             match entry {
                 LogEntry::User { message, .. } => {
@@ -148,7 +139,10 @@ fn process_conversation_file(path: PathBuf, show_last: bool) -> Result<Option<Co
         return Ok(None);
     }
 
-    let timestamp = first_timestamp.unwrap_or_else(Local::now);
+    // Use file modification time, falling back to current time if unavailable
+    let timestamp = modified
+        .map(DateTime::<Local>::from)
+        .unwrap_or_else(Local::now);
 
     // Create preview (first or last 3 messages)
     // Skip leading assistant messages by using preview_parts instead of all_parts
