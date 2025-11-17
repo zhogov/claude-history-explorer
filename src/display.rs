@@ -58,7 +58,7 @@ fn display_entry(entry: &LogEntry, no_tools: bool, show_thinking: bool) {
 /// Helper struct to categorize assistant message content
 struct FormattedMessage<'a> {
     text_blocks: Vec<&'a str>,
-    tool_calls: Vec<&'a str>,
+    tool_calls: Vec<(&'a str, &'a serde_json::Value)>,
     thinking_steps: Vec<&'a str>,
 }
 
@@ -71,7 +71,9 @@ impl<'a> From<&'a AssistantMessage> for FormattedMessage<'a> {
         for block in &msg.content {
             match block {
                 ContentBlock::Text { text } => text_blocks.push(text.as_str()),
-                ContentBlock::ToolUse { name, .. } => tool_calls.push(name.as_str()),
+                ContentBlock::ToolUse { name, input, .. } => {
+                    tool_calls.push((name.as_str(), input))
+                }
                 ContentBlock::Thinking { thinking, .. } => thinking_steps.push(thinking.as_str()),
                 _ => {}
             }
@@ -93,8 +95,15 @@ fn display_assistant_message(message: &AssistantMessage, no_tools: bool, show_th
     }
 
     if !no_tools {
-        for tool in formatted.tool_calls {
-            println!("{} <Calling Tool: {}>", "Assistant:".green().bold(), tool);
+        for (tool_name, tool_input) in formatted.tool_calls {
+            println!(
+                "{} <Calling Tool: {}>",
+                "Assistant:".green().bold(),
+                tool_name
+            );
+            if let Ok(formatted_input) = serde_json::to_string_pretty(tool_input) {
+                println!("{}", formatted_input.dimmed());
+            }
         }
     }
 

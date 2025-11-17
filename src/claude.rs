@@ -68,7 +68,6 @@ pub enum ContentBlock {
         #[allow(dead_code)]
         id: String,
         name: String,
-        #[allow(dead_code)]
         input: serde_json::Value,
     },
     #[allow(dead_code)]
