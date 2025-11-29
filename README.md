@@ -26,16 +26,21 @@ discover the matching transcript folder automatically.
 
 ## requirements
 
-- Rust toolchain from [rustup.rs](https://rustup.rs/) for building
 - [`fzf`](https://github.com/junegunn/fzf) available on your `PATH`
 - Claude Code conversation logs under `~/.claude/projects`
 
 ## install
 
-Install the published crate from crates.io:
+### Homebrew (macOS/Linux)
 
 ```sh
-$ cargo install claude-history
+brew install raine/claude-history/claude-history
+```
+
+### Cargo
+
+```sh
+cargo install claude-history
 ```
 
 ## usage
