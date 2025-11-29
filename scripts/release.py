@@ -117,6 +117,11 @@ def tag_release(new_version: str) -> None:
     run(["git", "tag", "-a", f"v{new_version}", "-m", message])
 
 
+def push_release() -> None:
+    run(["git", "push"])
+    run(["git", "push", "--tags"])
+
+
 def publish_crate() -> None:
     run(["cargo", "publish"])
 
@@ -149,6 +154,7 @@ def main() -> None:
     publish_crate()
 
     tag_release(new_version)
+    push_release()
 
     print(f"Released {crate_name} v{new_version}")
 
