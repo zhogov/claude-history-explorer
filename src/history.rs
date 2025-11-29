@@ -15,8 +15,14 @@ pub struct Conversation {
     pub full_text: String,
 }
 
-/// Get the Claude projects directory for the current working directory
-pub fn get_claude_projects_dir(current_dir: &Path) -> Result<PathBuf> {
+pub struct Project {
+    pub name: String,         // directory name (encoded)
+    pub display_name: String, // heuristic decoded path
+    pub modified: SystemTime,
+}
+
+/// Get the root Claude projects directory (~/.claude/projects)
+pub fn get_claude_projects_root() -> Result<PathBuf> {
     let home_dir = std::env::var("HOME").map_err(|_| {
         AppError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -24,12 +30,70 @@ pub fn get_claude_projects_dir(current_dir: &Path) -> Result<PathBuf> {
         ))
     })?;
 
-    let converted = convert_path_to_project_dir_name(current_dir);
+    Ok(PathBuf::from(home_dir).join(".claude").join("projects"))
+}
 
-    Ok(PathBuf::from(home_dir)
-        .join(".claude")
-        .join("projects")
-        .join(converted))
+/// Get the Claude projects directory for the current working directory
+pub fn get_claude_projects_dir(current_dir: &Path) -> Result<PathBuf> {
+    let converted = convert_path_to_project_dir_name(current_dir);
+    Ok(get_claude_projects_root()?.join(converted))
+}
+
+/// List all projects that contain conversation files
+pub fn list_projects(root: &Path) -> Result<Vec<Project>> {
+    let entries = read_dir(root)?;
+
+    let mut projects: Vec<Project> = entries
+        .par_bridge()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+
+            if !path.is_dir() {
+                return None;
+            }
+
+            // Check if project has any non-agent .jsonl files
+            let has_conversations = read_dir(&path).ok()?.any(|e| {
+                e.ok()
+                    .map(|e| {
+                        let path = e.path();
+                        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                        path.extension().map(|s| s == "jsonl").unwrap_or(false)
+                            && !name.starts_with("agent-")
+                    })
+                    .unwrap_or(false)
+            });
+
+            if !has_conversations {
+                return None;
+            }
+
+            let name = path.file_name()?.to_string_lossy().to_string();
+            // Heuristic decode: convert encoded directory name back to readable path
+            // The encoding replaces non-alphanumeric chars (except -) with -
+            // So / becomes -, but _ also becomes -, and __ becomes --
+            // We convert single dashes to / but preserve double dashes as _
+            let display_name = decode_project_dir_name(&name);
+            let modified = entry
+                .metadata()
+                .ok()?
+                .modified()
+                .ok()
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+
+            Some(Project {
+                name,
+                display_name,
+                modified,
+            })
+        })
+        .collect();
+
+    // Sort by recently modified
+    projects.sort_by(|a, b| b.modified.cmp(&a.modified));
+
+    Ok(projects)
 }
 
 /// Convert the current working directory into Claude's project directory name.
@@ -46,9 +110,55 @@ fn convert_path_to_project_dir_name(path: &Path) -> String {
         .collect()
 }
 
+/// Decode a project directory name back to a readable path.
+///
+/// Claude's encoding replaces all non-alphanumeric characters (except `-`) with `-`.
+/// This means `/`, `_`, and `.` all become `-`, making the encoding lossy and
+/// impossible to reverse perfectly.
+///
+/// We use a heuristic based on consecutive dash count:
+/// - Odd (1, 3, 5...): `/` followed by underscores (e.g. `-` -> `/`, `---` -> `/__`)
+/// - Even (2, 4...): All underscores (e.g. `--` -> `__`)
+///
+/// This prioritizes `__` (common in directory names like git worktrees) over `/_`.
+/// Single underscores and dots in the original path will be incorrectly decoded as `/`,
+/// but the result is still recognizable enough for project selection in fzf.
+fn decode_project_dir_name(encoded: &str) -> String {
+    let mut result = String::with_capacity(encoded.len());
+    let mut chars = encoded.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '-' {
+            // Count consecutive dashes
+            let mut count = 1;
+            while chars.peek() == Some(&'-') {
+                chars.next();
+                count += 1;
+            }
+
+            if count % 2 == 1 {
+                // Odd: first is '/', rest are '_'
+                result.push('/');
+                for _ in 0..(count - 1) {
+                    result.push('_');
+                }
+            } else {
+                // Even: all are '_'
+                for _ in 0..count {
+                    result.push('_');
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
-    use super::convert_path_to_project_dir_name;
+    use super::{convert_path_to_project_dir_name, decode_project_dir_name};
     use std::path::Path;
 
     #[test]
@@ -66,6 +176,26 @@ mod tests {
         let path = Path::new("/tmp/foo-Bar123");
         let converted = convert_path_to_project_dir_name(path);
         assert_eq!(converted, "-tmp-foo-Bar123");
+    }
+
+    #[test]
+    fn decodes_consecutive_dashes_to_underscores() {
+        // Double dash -> __ (even count = all underscores)
+        let encoded = "-Users-raine-code-myproject--worktrees-feature";
+        let decoded = decode_project_dir_name(encoded);
+        assert_eq!(decoded, "/Users/raine/code/myproject__worktrees/feature");
+
+        // Triple dash -> /__ (odd count = slash + underscores)
+        let encoded = "-Users-raine-code-myproject---worktrees-feature";
+        let decoded = decode_project_dir_name(encoded);
+        assert_eq!(decoded, "/Users/raine/code/myproject/__worktrees/feature");
+    }
+
+    #[test]
+    fn decodes_single_dashes_to_slashes() {
+        let encoded = "-tmp-foo-Bar123";
+        let decoded = decode_project_dir_name(encoded);
+        assert_eq!(decoded, "/tmp/foo/Bar123");
     }
 }
 

@@ -66,6 +66,7 @@ Options:
       --show-thinking  Show thinking blocks in the conversation output
       --hide-thinking  Hide thinking blocks from the conversation output
   -c, --resume         Resume the selected conversation in Claude Code
+  -a, --all-projects   Browse conversations from all projects
   -h, --help           Print help
 ```
 
@@ -91,6 +92,24 @@ see Claude's reasoning process.
 
 If you want to continue a conversation, launch `claude-history` with `--resume`
 and it will hand off to `claude --resume <conversation-id>`.
+
+### browsing all projects
+
+By default, `claude-history` only shows conversations from the current directory's
+project. Use `--all-projects` (or `-a`) to browse conversations from any project:
+
+```sh
+$ claude-history --all-projects
+```
+
+This first shows an fzf selector with all projects that have conversation history,
+sorted by most recently modified. After selecting a project, you'll see the usual
+conversation selector.
+
+Note: Project paths are decoded from Claude's internal format using a heuristic.
+Claude encodes paths by replacing `/`, `_`, and `.` with `-`, which is lossy.
+The displayed paths may not be exact (e.g., single underscores may appear as `/`),
+but should be recognizable enough to identify your projects.
 
 ### integration with other scripts
 

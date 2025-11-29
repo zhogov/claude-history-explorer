@@ -49,16 +49,34 @@ fn run() -> Result<()> {
     let args = Args::parse();
     let config = config::load_config()?;
 
-    // Get current working directory
-    let current_dir = std::env::current_dir().map_err(|e| {
-        AppError::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Failed to get current directory: {}", e),
-        ))
-    })?;
+    // Determine the projects directory
+    let projects_dir = if args.all_projects {
+        let root = history::get_claude_projects_root()?;
 
-    // Convert to Claude projects directory path
-    let projects_dir = history::get_claude_projects_dir(&current_dir)?;
+        if !root.exists() {
+            return Err(AppError::ProjectsDirNotFound(root.display().to_string()));
+        }
+
+        let projects = history::list_projects(&root)?;
+
+        if projects.is_empty() {
+            return Err(AppError::NoHistoryFound(root.display().to_string()));
+        }
+
+        let selected_project_name = fzf::select_project(&projects)?;
+        root.join(selected_project_name)
+    } else {
+        // Get current working directory
+        let current_dir = std::env::current_dir().map_err(|e| {
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Failed to get current directory: {}", e),
+            ))
+        })?;
+
+        // Convert to Claude projects directory path
+        history::get_claude_projects_dir(&current_dir)?
+    };
 
     // If --show-dir flag is set, print directory and exit
     if args.show_dir {

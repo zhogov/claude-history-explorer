@@ -62,4 +62,8 @@ pub struct Args {
         help = "Print debug information about which conversations were found and filtered"
     )]
     pub debug: bool,
+
+    /// Browse conversations from all projects
+    #[arg(long, short = 'a', help = "Browse conversations from all projects")]
+    pub all_projects: bool,
 }
