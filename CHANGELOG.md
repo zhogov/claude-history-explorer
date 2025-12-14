@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.8 (2025-12-14)
+
+- Improved fzf UX: the timestamp stays visible when searching
+
 ## v0.1.7 (2025-12-14)
 
 - Added `--global` (`-g`) flag to search conversations across all projects at once
