@@ -6,6 +6,11 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+// ANSI color codes
+const DIM: &str = "\x1b[2m";
+const CYAN: &str = "\x1b[36m";
+const RESET: &str = "\x1b[0m";
+
 /// Run fzf to allow the user to select a conversation
 pub fn select_conversation(
     conversations: &[Conversation],
@@ -13,6 +18,7 @@ pub fn select_conversation(
 ) -> Result<PathBuf> {
     let mut child = Command::new("fzf")
         .args([
+            "--ansi",
             "--height",
             "40%",
             "--reverse",
@@ -47,7 +53,7 @@ pub fn select_conversation(
             };
             // Prepend project name if available (for global search mode)
             let prefix = if let Some(name) = &conv.project_name {
-                format!("[{}] ", name)
+                format!("{CYAN}[{}]{RESET}{DIM} ", name)
             } else {
                 String::new()
             };
@@ -55,8 +61,8 @@ pub fn select_conversation(
             // Field 1 (INDEX) is hidden, field 2 (timestamp) is frozen, field 3 scrolls
             writeln!(
                 stdin,
-                "{}\x1f[{}] {}{} │\x1f {}",
-                conv.index, conv.index, prefix, timestamp, conv.full_text
+                "{}\x1f{DIM}[{}] {}{timestamp}{RESET} │\x1f {}",
+                conv.index, conv.index, prefix, conv.full_text
             )?;
         }
         stdin.flush()?;
