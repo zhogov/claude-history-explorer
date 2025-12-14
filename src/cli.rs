@@ -64,6 +64,18 @@ pub struct Args {
     pub debug: bool,
 
     /// Browse conversations from all projects
-    #[arg(long, short = 'a', help = "Browse conversations from all projects")]
+    #[arg(
+        long,
+        short = 'a',
+        help = "Browse conversations from all projects (select project first)"
+    )]
     pub all_projects: bool,
+
+    /// Search conversations from all projects globally
+    #[arg(
+        long,
+        short = 'g',
+        help = "Search all conversations from all projects at once"
+    )]
+    pub global: bool,
 }

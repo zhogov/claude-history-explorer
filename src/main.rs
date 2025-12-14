@@ -9,7 +9,7 @@ mod history;
 use clap::Parser;
 use cli::Args;
 use error::{AppError, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -49,48 +49,6 @@ fn run() -> Result<()> {
     let args = Args::parse();
     let config = config::load_config()?;
 
-    // Determine the projects directory
-    let projects_dir = if args.all_projects {
-        let root = history::get_claude_projects_root()?;
-
-        if !root.exists() {
-            return Err(AppError::ProjectsDirNotFound(root.display().to_string()));
-        }
-
-        let projects = history::list_projects(&root)?;
-
-        if projects.is_empty() {
-            return Err(AppError::NoHistoryFound(root.display().to_string()));
-        }
-
-        let selected_project_name = fzf::select_project(&projects)?;
-        root.join(selected_project_name)
-    } else {
-        // Get current working directory
-        let current_dir = std::env::current_dir().map_err(|e| {
-            AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("Failed to get current directory: {}", e),
-            ))
-        })?;
-
-        // Convert to Claude projects directory path
-        history::get_claude_projects_dir(&current_dir)?
-    };
-
-    // If --show-dir flag is set, print directory and exit
-    if args.show_dir {
-        println!("{}", projects_dir.display());
-        return Ok(());
-    }
-
-    // Verify directory exists
-    if !projects_dir.exists() {
-        return Err(AppError::ProjectsDirNotFound(
-            projects_dir.display().to_string(),
-        ));
-    }
-
     // Merge CLI arguments with config file settings. CLI takes precedence.
     let display_config = config.display.unwrap_or_default();
 
@@ -115,11 +73,62 @@ fn run() -> Result<()> {
         false,
     );
 
-    // Load all conversations (reads each file once)
-    let conversations = history::load_conversations(&projects_dir, show_last, args.debug)?;
+    // Determine how to load conversations based on mode
+    let conversations = if args.global {
+        // Mode 1: Global Search (-g) - search all projects at once
+        history::load_all_conversations(show_last, args.debug)?
+    } else if args.all_projects {
+        // Mode 2: Browse Projects (-a) - select project first, then show conversations
+        let root = history::get_claude_projects_root()?;
+
+        if !root.exists() {
+            return Err(AppError::ProjectsDirNotFound(root.display().to_string()));
+        }
+
+        let projects = history::list_projects(&root)?;
+
+        if projects.is_empty() {
+            return Err(AppError::NoHistoryFound(root.display().to_string()));
+        }
+
+        let selected_project_name = fzf::select_project(&projects)?;
+        let projects_dir = root.join(selected_project_name);
+
+        if !projects_dir.exists() {
+            return Err(AppError::ProjectsDirNotFound(
+                projects_dir.display().to_string(),
+            ));
+        }
+
+        history::load_conversations(&projects_dir, show_last, args.debug)?
+    } else {
+        // Mode 3: Current Directory (Default)
+        let current_dir = std::env::current_dir().map_err(|e| {
+            AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Failed to get current directory: {}", e),
+            ))
+        })?;
+
+        let projects_dir = history::get_claude_projects_dir(&current_dir)?;
+
+        // If --show-dir flag is set, print directory and exit
+        if args.show_dir {
+            println!("{}", projects_dir.display());
+            return Ok(());
+        }
+
+        if !projects_dir.exists() {
+            return Err(AppError::ProjectsDirNotFound(
+                projects_dir.display().to_string(),
+            ));
+        }
+
+        history::load_conversations(&projects_dir, show_last, args.debug)?
+    };
 
     if conversations.is_empty() {
-        return Err(AppError::NoHistoryFound(projects_dir.display().to_string()));
+        return Err(AppError::NoHistoryFound("selected scope".to_string()));
     }
 
     // Use fzf to select a conversation
@@ -131,7 +140,20 @@ fn run() -> Result<()> {
     }
 
     if args.resume {
-        resume_with_claude(&selected_path)?;
+        // Find the selected conversation to get its project_path
+        let conv = conversations.iter().find(|c| c.path == selected_path);
+        if args.debug {
+            eprintln!("[DEBUG] Selected path: {}", selected_path.display());
+            eprintln!("[DEBUG] Found conversation: {}", conv.is_some());
+            if let Some(c) = conv {
+                eprintln!("[DEBUG] project_path: {:?}", c.project_path);
+                if let Some(p) = &c.project_path {
+                    eprintln!("[DEBUG] project_path exists: {}", p.exists());
+                }
+            }
+        }
+        let project_path = conv.and_then(|c| c.project_path.as_ref());
+        resume_with_claude(&selected_path, project_path)?;
         return Ok(());
     }
 
@@ -141,7 +163,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn resume_with_claude(selected_path: &Path) -> Result<()> {
+fn resume_with_claude(selected_path: &Path, project_path: Option<&PathBuf>) -> Result<()> {
     let conversation_id = selected_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -150,8 +172,25 @@ fn resume_with_claude(selected_path: &Path) -> Result<()> {
         })?
         .to_owned();
 
+    // Require a valid project directory to resume
+    let project_dir = match project_path {
+        Some(path) if path.exists() && path.is_dir() => path,
+        Some(path) => {
+            return Err(AppError::ClaudeExecutionError(format!(
+                "Project directory no longer exists: {}",
+                path.display()
+            )));
+        }
+        None => {
+            return Err(AppError::ClaudeExecutionError(
+                "Cannot determine project directory for this conversation".to_string(),
+            ));
+        }
+    };
+
     let mut command = Command::new("claude");
     command.args(["--resume", &conversation_id]);
+    command.current_dir(project_dir);
 
     run_claude_command(command)
 }

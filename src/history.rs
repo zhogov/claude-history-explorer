@@ -13,6 +13,8 @@ pub struct Conversation {
     pub timestamp: DateTime<Local>,
     pub preview: String,
     pub full_text: String,
+    pub project_name: Option<String>,
+    pub project_path: Option<PathBuf>,
 }
 
 pub struct Project {
@@ -37,6 +39,67 @@ pub fn get_claude_projects_root() -> Result<PathBuf> {
 pub fn get_claude_projects_dir(current_dir: &Path) -> Result<PathBuf> {
     let converted = convert_path_to_project_dir_name(current_dir);
     Ok(get_claude_projects_root()?.join(converted))
+}
+
+/// Load conversations from ALL projects globally
+pub fn load_all_conversations(show_last: bool, debug: bool) -> Result<Vec<Conversation>> {
+    let root = get_claude_projects_root()?;
+    let projects = list_projects(&root)?;
+
+    if debug {
+        eprintln!(
+            "[DEBUG] Loading global history from {} projects",
+            projects.len()
+        );
+    }
+
+    // Load conversations from all projects in parallel
+    let mut all_conversations: Vec<Conversation> = projects
+        .par_iter()
+        .flat_map(|project| {
+            let project_dir = root.join(&project.name);
+            match load_conversations(&project_dir, show_last, debug) {
+                Ok(mut convs) => {
+                    // Extract a short display name for the project (use encoded name for parsing)
+                    let short_name = format_project_short_name(&project.name);
+                    // Try to find the actual project path (tries multiple decode strategies)
+                    let decoded_path = decode_project_dir_name_to_path(&project.name);
+                    // Inject project info into each conversation
+                    for conv in &mut convs {
+                        conv.project_name = Some(short_name.clone());
+                        conv.project_path = Some(decoded_path.clone());
+                    }
+                    convs
+                }
+                Err(e) => {
+                    if debug {
+                        eprintln!(
+                            "[DEBUG] Failed to load project {}: {}",
+                            project.display_name, e
+                        );
+                    }
+                    Vec::new()
+                }
+            }
+        })
+        .collect();
+
+    // Global sort by timestamp (newest first)
+    all_conversations.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    // Re-index for fzf selection logic
+    for (idx, conv) in all_conversations.iter_mut().enumerate() {
+        conv.index = idx;
+    }
+
+    if debug {
+        eprintln!(
+            "[DEBUG] Total global conversations loaded: {}",
+            all_conversations.len()
+        );
+    }
+
+    Ok(all_conversations)
 }
 
 /// List all projects that contain conversation files
@@ -110,7 +173,242 @@ fn convert_path_to_project_dir_name(path: &Path) -> String {
         .collect()
 }
 
-/// Decode a project directory name back to a readable path.
+/// Format an encoded project name into a short display name.
+///
+/// For worktree paths like `/Users/raine/code/claude-history__worktrees/claude-search`,
+/// returns `claude-history/claude-search` to show both the main project and worktree name.
+///
+/// For regular paths, returns just the folder name.
+fn format_project_short_name(encoded_name: &str) -> String {
+    // Get the decoded path (may or may not exist on filesystem)
+    let decoded_path = decode_project_dir_name_to_path(encoded_name);
+    let path_str = decoded_path.to_string_lossy();
+
+    // Check for worktree pattern in the decoded path (works even if path doesn't exist)
+    if let Some(wt_pos) = path_str
+        .find("__worktrees/")
+        .or_else(|| path_str.find("/.worktrees/"))
+    {
+        let is_hidden = path_str[wt_pos..].starts_with("/.");
+        let separator_len = if is_hidden {
+            "/.worktrees/".len()
+        } else {
+            "__worktrees/".len()
+        };
+
+        // Get main project (folder before __worktrees)
+        let before = &path_str[..wt_pos];
+        let main_project = Path::new(before)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        // Get worktree name (folder after __worktrees/)
+        let after = &path_str[wt_pos + separator_len..];
+        let worktree = after.split('/').next().unwrap_or("");
+
+        if !main_project.is_empty() && !worktree.is_empty() {
+            return format!("{}/{}", main_project, worktree);
+        }
+    }
+
+    // Not a worktree, just return the folder name
+    decoded_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| encoded_name.to_string())
+}
+
+/// Try to decode a project directory name back to a valid path.
+///
+/// Claude's encoding replaces all non-alphanumeric characters (except `-`) with `-`.
+/// This means `/`, `_`, and `.` all become `-`, making the encoding lossy.
+/// Additionally, `-` in folder names is preserved, making it ambiguous with `/`.
+///
+/// This function uses the filesystem to find which interpretation actually exists.
+fn decode_project_dir_name_to_path(encoded: &str) -> PathBuf {
+    // Try filesystem-guided decode first
+    if let Some(path) = decode_with_filesystem_check(encoded) {
+        return path;
+    }
+
+    // Fallback: simple decode (all single - become /, -- become __)
+    PathBuf::from(decode_with_double_dash_as(encoded, "__"))
+}
+
+/// Decode by checking the filesystem to resolve ambiguous dashes.
+/// Uses a greedy approach: at each `-`, check if keeping it as `-` leads to a valid path.
+/// Special handling for worktree paths: after `__worktrees/`, keep remaining dashes as-is.
+fn decode_with_filesystem_check(encoded: &str) -> Option<PathBuf> {
+    if encoded.is_empty() || !encoded.starts_with('-') {
+        return None;
+    }
+
+    // Special handling for worktree paths
+    // Pattern: -...-<project>--worktrees-<worktree-name>
+    // The folder structure is: <parent>/<project>__worktrees/<worktree-name>
+    if let Some(wt_pos) = encoded.find("--worktrees-") {
+        // Decode the part before --worktrees using filesystem check
+        let before_wt = &encoded[..wt_pos];
+        let before_path = decode_path_segment_with_fs(before_wt)?;
+
+        // Get the project name (last component) and parent path
+        let project_name = before_path.file_name()?.to_string_lossy();
+        let parent_path = before_path.parent()?;
+
+        // The worktree folder name is everything after --worktrees-
+        // Keep dashes as-is since folder names can have dashes
+        let worktree_name = &encoded[wt_pos + "--worktrees-".len()..];
+
+        // Build: <parent>/<project>__worktrees/<worktree-name>
+        let worktrees_folder = format!("{}__worktrees", project_name);
+        let full_path = parent_path.join(worktrees_folder).join(worktree_name);
+
+        // Even if path doesn't exist (deleted worktree), return it
+        // The structure is correct
+        return Some(full_path);
+    }
+
+    // Non-worktree path: use filesystem-guided decode
+    decode_path_segment_with_fs(encoded)
+}
+
+/// Decode a path segment using filesystem checks to resolve ambiguous dashes.
+fn decode_path_segment_with_fs(encoded: &str) -> Option<PathBuf> {
+    if encoded.is_empty() {
+        return Some(PathBuf::from("/"));
+    }
+
+    let start = if encoded.starts_with('-') { 1 } else { 0 };
+    let rest = &encoded[start..];
+    let mut current_path = PathBuf::from("/");
+    let mut current_segment = String::new();
+
+    let chars: Vec<char> = rest.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if c == '-' {
+            // Count consecutive dashes
+            let mut dash_count = 1;
+            while i + dash_count < chars.len() && chars[i + dash_count] == '-' {
+                dash_count += 1;
+            }
+
+            if dash_count >= 2 {
+                // Double dash: likely __ or /.
+                // Try __ first, then /. if that doesn't work
+                let test_path_underscore = current_path.join(format!("{}__", current_segment));
+                let test_path_dot = current_path.join(&current_segment).join(".");
+
+                if test_path_underscore.exists() || current_path.join(format!("{}_", current_segment)).read_dir().ok().map(|mut d| d.next().is_some()).unwrap_or(false) {
+                    current_segment.push_str("__");
+                } else if test_path_dot.exists() {
+                    // Treat as /.
+                    if !current_segment.is_empty() {
+                        current_path = current_path.join(&current_segment);
+                        current_segment.clear();
+                    }
+                    current_segment.push('.');
+                } else {
+                    // Default to __
+                    current_segment.push_str("__");
+                }
+                i += 2;
+                // Handle remaining dashes if more than 2
+                for _ in 2..dash_count {
+                    current_segment.push('_');
+                    i += 1;
+                }
+            } else {
+                // Single dash: could be / or literal -
+                // Check if any folder exists that starts with this prefix
+                let has_dash_continuation = current_path
+                    .read_dir()
+                    .ok()
+                    .and_then(|entries| {
+                        let prefix = format!("{}-", current_segment);
+                        entries
+                            .filter_map(|e| e.ok())
+                            .any(|e| {
+                                e.file_name()
+                                    .to_string_lossy()
+                                    .starts_with(&prefix)
+                            })
+                            .then_some(())
+                    })
+                    .is_some();
+
+                if has_dash_continuation && !current_segment.is_empty() {
+                    // Keep dash as part of segment
+                    current_segment.push('-');
+                } else {
+                    // Treat as path separator
+                    if !current_segment.is_empty() {
+                        current_path = current_path.join(&current_segment);
+                        if !current_path.exists() {
+                            return None;
+                        }
+                        current_segment.clear();
+                    }
+                }
+                i += 1;
+            }
+        } else {
+            current_segment.push(c);
+            i += 1;
+        }
+    }
+
+    // Add final segment
+    if !current_segment.is_empty() {
+        current_path = current_path.join(&current_segment);
+    }
+
+    if current_path.exists() {
+        Some(current_path)
+    } else {
+        None
+    }
+}
+
+/// Decode with a specific replacement for double dashes (fallback method)
+fn decode_with_double_dash_as(encoded: &str, double_dash_replacement: &str) -> String {
+    let mut result = String::with_capacity(encoded.len());
+    let mut chars = encoded.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '-' {
+            let mut count = 1;
+            while chars.peek() == Some(&'-') {
+                chars.next();
+                count += 1;
+            }
+
+            match count {
+                1 => result.push('/'),
+                2 => result.push_str(double_dash_replacement),
+                n => {
+                    result.push('/');
+                    for _ in 0..((n - 1) / 2) {
+                        result.push_str(double_dash_replacement);
+                    }
+                    if (n - 1) % 2 == 1 {
+                        result.push('/');
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+/// Decode a project directory name back to a readable path (for display purposes).
 ///
 /// Claude's encoding replaces all non-alphanumeric characters (except `-`) with `-`.
 /// This means `/`, `_`, and `.` all become `-`, making the encoding lossy and
@@ -158,8 +456,12 @@ fn decode_project_dir_name(encoded: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{convert_path_to_project_dir_name, decode_project_dir_name};
+    use super::{
+        convert_path_to_project_dir_name, decode_project_dir_name, decode_with_double_dash_as,
+    };
     use std::path::Path;
+
+    // === Encoding tests ===
 
     #[test]
     fn converts_various_separators_and_punctuation() {
@@ -179,6 +481,25 @@ mod tests {
     }
 
     #[test]
+    fn encodes_worktree_with_double_underscore() {
+        let path = Path::new("/Users/raine/code/claude-history__worktrees/claude-search");
+        let converted = convert_path_to_project_dir_name(path);
+        assert_eq!(
+            converted,
+            "-Users-raine-code-claude-history--worktrees-claude-search"
+        );
+    }
+
+    #[test]
+    fn encodes_hidden_directory() {
+        let path = Path::new("/Users/raine/dotfiles/.config/karabiner");
+        let converted = convert_path_to_project_dir_name(path);
+        assert_eq!(converted, "-Users-raine-dotfiles--config-karabiner");
+    }
+
+    // === Display decode tests (decode_project_dir_name) ===
+
+    #[test]
     fn decodes_consecutive_dashes_to_underscores() {
         // Double dash -> __ (even count = all underscores)
         let encoded = "-Users-raine-code-myproject--worktrees-feature";
@@ -196,6 +517,128 @@ mod tests {
         let encoded = "-tmp-foo-Bar123";
         let decoded = decode_project_dir_name(encoded);
         assert_eq!(decoded, "/tmp/foo/Bar123");
+    }
+
+    // === Fallback decode tests (decode_with_double_dash_as) ===
+
+    #[test]
+    fn decode_with_double_dash_as_underscore() {
+        let encoded = "-Users-raine-code-project--worktrees-feature";
+        let decoded = decode_with_double_dash_as(encoded, "__");
+        assert_eq!(decoded, "/Users/raine/code/project__worktrees/feature");
+    }
+
+    #[test]
+    fn decode_with_double_dash_as_hidden_dir() {
+        let encoded = "-Users-raine-dotfiles--config-karabiner";
+        let decoded = decode_with_double_dash_as(encoded, "/.");
+        assert_eq!(decoded, "/Users/raine/dotfiles/.config/karabiner");
+    }
+
+    #[test]
+    fn decode_preserves_dashes_in_folder_names_in_fallback() {
+        // Note: The fallback decode can't distinguish dashes in folder names
+        // from path separators - this is expected behavior
+        let encoded = "-Users-raine-code-claude-history";
+        let decoded = decode_with_double_dash_as(encoded, "__");
+        // This incorrectly decodes to /Users/raine/code/claude/history
+        // because single dashes are treated as path separators
+        assert_eq!(decoded, "/Users/raine/code/claude/history");
+    }
+
+    // === Worktree path structure tests ===
+
+    #[test]
+    fn worktree_encoded_pattern() {
+        // Verify the encoding pattern for worktrees
+        let path = Path::new("/Users/raine/code/WalkingMate__worktrees/template-engine");
+        let encoded = convert_path_to_project_dir_name(path);
+        assert_eq!(
+            encoded,
+            "-Users-raine-code-WalkingMate--worktrees-template-engine"
+        );
+
+        // The --worktrees- pattern should be detectable
+        assert!(encoded.contains("--worktrees-"));
+    }
+
+    #[test]
+    fn extract_worktree_name_from_encoded() {
+        let encoded = "-Users-raine-code-WalkingMate--worktrees-template-engine";
+
+        // Find the worktree marker
+        let wt_pos = encoded.find("--worktrees-").unwrap();
+
+        // Extract worktree name (everything after --worktrees-)
+        let worktree_name = &encoded[wt_pos + "--worktrees-".len()..];
+        assert_eq!(worktree_name, "template-engine");
+    }
+
+    #[test]
+    fn extract_project_name_before_worktrees() {
+        let encoded = "-Users-raine-code-WalkingMate--worktrees-template-engine";
+
+        // Find the worktree marker
+        let wt_pos = encoded.find("--worktrees-").unwrap();
+
+        // Extract the part before --worktrees
+        let before_wt = &encoded[..wt_pos];
+        assert_eq!(before_wt, "-Users-raine-code-WalkingMate");
+
+        // When decoded with filesystem check, this should give us WalkingMate as the project name
+        // For fallback, it decodes to a path ending in WalkingMate
+        let decoded = decode_with_double_dash_as(before_wt, "__");
+        assert_eq!(decoded, "/Users/raine/code/WalkingMate");
+    }
+
+    // === format_project_short_name tests (worktree display) ===
+
+    #[test]
+    fn format_short_name_extracts_worktree_pattern() {
+        // Test the worktree pattern detection in decoded paths
+        let path = "/Users/raine/code/WalkingMate__worktrees/template-engine";
+
+        // Check for worktree pattern
+        assert!(path.contains("__worktrees/"));
+
+        // Extract main project
+        let wt_pos = path.find("__worktrees/").unwrap();
+        let before = &path[..wt_pos];
+        let main_project = Path::new(before)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap();
+        assert_eq!(main_project, "WalkingMate");
+
+        // Extract worktree name
+        let after = &path[wt_pos + "__worktrees/".len()..];
+        let worktree = after.split('/').next().unwrap();
+        assert_eq!(worktree, "template-engine");
+
+        // Combined display
+        let display = format!("{}/{}", main_project, worktree);
+        assert_eq!(display, "WalkingMate/template-engine");
+    }
+
+    #[test]
+    fn format_short_name_hidden_worktrees() {
+        // Test .worktrees pattern (hidden worktrees folder)
+        let path = "/Users/raine/code/workmux/.worktrees/uncommitted";
+
+        // Check for hidden worktree pattern
+        assert!(path.contains("/.worktrees/"));
+
+        let wt_pos = path.find("/.worktrees/").unwrap();
+        let before = &path[..wt_pos];
+        let main_project = Path::new(before)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap();
+        assert_eq!(main_project, "workmux");
+
+        let after = &path[wt_pos + "/.worktrees/".len()..];
+        let worktree = after.split('/').next().unwrap();
+        assert_eq!(worktree, "uncommitted");
     }
 }
 
@@ -417,6 +860,8 @@ fn process_conversation_file(
         timestamp,
         preview,
         full_text,
+        project_name: None,
+        project_path: None,
     }))
 }
 

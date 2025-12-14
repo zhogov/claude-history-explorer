@@ -71,7 +71,8 @@ Options:
       --show-thinking  Show thinking blocks in the conversation output
       --hide-thinking  Hide thinking blocks from the conversation output
   -c, --resume         Resume the selected conversation in Claude Code
-  -a, --all-projects   Browse conversations from all projects
+  -a, --all-projects   Browse conversations from all projects (select project first)
+  -g, --global         Search all conversations from all projects at once
   -h, --help           Print help
 ```
 
@@ -115,6 +116,24 @@ Note: Project paths are decoded from Claude's internal format using a heuristic.
 Claude encodes paths by replacing `/`, `_`, and `.` with `-`, which is lossy.
 The displayed paths may not be exact (e.g., single underscores may appear as `/`),
 but should be recognizable enough to identify your projects.
+
+### global search
+
+Use `--global` (or `-g`) to search all conversations from all projects at once:
+
+```sh
+$ claude-history --global
+```
+
+This displays all conversations from every project in a single fzf view, sorted by
+modification time (newest first). Each conversation is prefixed with its project path
+so you can identify which project it belongs to.
+
+For [workmux](https://github.com/raine/workmux) users, worktree paths are displayed in
+a compact format: `[project/worktree]` instead of just the worktree folder name.
+
+The `--resume` flag works with global search. It will automatically run Claude in the
+correct project directory for the selected conversation.
 
 ### integration with other scripts
 

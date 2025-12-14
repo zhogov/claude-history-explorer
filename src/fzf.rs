@@ -41,11 +41,17 @@ pub fn select_conversation(
             } else {
                 conv.timestamp.format("%b %d, %H:%M").to_string()
             };
+            // Prepend project name if available (for global search mode)
+            let prefix = if let Some(name) = &conv.project_name {
+                format!("[{}] ", name)
+            } else {
+                String::new()
+            };
             // Include full_text in the display so fzf can search it
             // (fzf doesn't search hidden fields when using --with-nth)
             let display_part = format!(
-                "[{}] {} | {} {}",
-                conv.index, timestamp, conv.preview, conv.full_text
+                "[{}] {}{} | {} {}",
+                conv.index, prefix, timestamp, conv.preview, conv.full_text
             );
             // Format: INDEX<tab>DISPLAY_PART
             writeln!(stdin, "{}\t{}", conv.index, display_part)?;
