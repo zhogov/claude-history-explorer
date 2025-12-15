@@ -36,6 +36,7 @@ pub fn select_conversation(
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| AppError::FzfExecutionError(e.to_string()))?;
 
@@ -71,7 +72,27 @@ pub fn select_conversation(
     let output = child.wait_with_output()?;
 
     if !output.status.success() {
-        return Err(AppError::SelectionCancelled);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("unknown option: --freeze-left") {
+            return Err(AppError::FzfVersionTooOld);
+        }
+
+        match output.status.code() {
+            Some(1) => return Err(AppError::SelectionCancelled),
+            Some(2) => {
+                return Err(AppError::FzfExecutionError(if stderr.is_empty() {
+                    "fzf exited with error code 2".to_string()
+                } else {
+                    stderr.to_string()
+                }));
+            }
+            _ => {
+                return Err(AppError::FzfExecutionError(format!(
+                    "fzf failed: {}",
+                    stderr
+                )));
+            }
+        }
     }
 
     let selection = String::from_utf8_lossy(&output.stdout);
