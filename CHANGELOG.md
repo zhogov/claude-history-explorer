@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.11 (2025-12-20)
+
+- Cleaned up fzf picker display by removing index numbers
+
 ## v0.1.10 (2025-12-15)
 
 - Added a specific error message when fzf version is too old (requires 0.67.0+)
@@ -14,7 +18,8 @@
 
 ## v0.1.7 (2025-12-14)
 
-- Added `--global` (`-g`) flag to search conversations across all projects at once
+- Added `--global` (`-g`) flag to search conversations across all projects at
+  once
 
 ## v0.1.6 (2025-11-29)
 
@@ -35,21 +40,26 @@
 ## v0.1.3 (2025-10-30)
 
 - Added `--debug` flag to show diagnostic information about conversation loading
-- Fixed conversations containing only `/clear` commands incorrectly appearing in the list
+- Fixed conversations containing only `/clear` commands incorrectly appearing in
+  the list
 - Cleaned up `/clear` command metadata from conversation previews
 - Used file modification time for more accurate conversation dates
 
 ## v0.1.2 (2025-10-29)
 
-- Fixed display of tool results that contain structured content instead of plain text
+- Fixed display of tool results that contain structured content instead of plain
+  text
 
 ## v0.1.1 (2025-10-29)
 
-- Added configuration file support (`~/.config/claude-history/config.toml`) for persistent display preferences
-- Added `--show-thinking` and `--hide-thinking` flags to control visibility of Claude's thinking blocks
+- Added configuration file support (`~/.config/claude-history/config.toml`) for
+  persistent display preferences
+- Added `--show-thinking` and `--hide-thinking` flags to control visibility of
+  Claude's thinking blocks
 - Hidden tool calls by default (use `--show-tools` or `-t` to show them)
 - Added `--first` flag to show first messages in preview (inverse of `--last`)
-- Added `--absolute-time` flag to explicitly use timestamps (inverse of `--relative-time`)
+- Added `--absolute-time` flag to explicitly use timestamps (inverse of
+  `--relative-time`)
 - Fixed message preview order when using `--last` flag
 
 ## v0.1.0 (2025-10-29)
