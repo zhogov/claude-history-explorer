@@ -62,15 +62,16 @@ pub fn load_all_conversations(show_last: bool, debug: bool) -> Result<Vec<Conver
             let project_dir = root.join(&project.name);
             match load_conversations(&project_dir, show_last, debug) {
                 Ok(mut convs) => {
-                    // Extract a short display name for the project (use encoded name for parsing)
-                    let short_name = format_project_short_name(&project.name);
-                    // Fallback: decode the project directory name (may be inaccurate for paths with dots)
-                    let decoded_path = decode_project_dir_name_to_path(&project.name);
+                    // Fallback path for old JSONL files without cwd field
+                    let fallback_path = decode_project_dir_name_to_path(&project.name);
+
                     // Inject project info into each conversation
                     for conv in &mut convs {
-                        conv.project_name = Some(short_name.clone());
                         // Prefer the cwd extracted from the JSONL file (accurate), fall back to decoded path
-                        conv.project_path = Some(conv.cwd.clone().unwrap_or_else(|| decoded_path.clone()));
+                        let project_path =
+                            conv.cwd.clone().unwrap_or_else(|| fallback_path.clone());
+                        conv.project_name = Some(format_short_name_from_path(&project_path));
+                        conv.project_path = Some(project_path);
                     }
                     convs
                 }
@@ -176,18 +177,16 @@ fn convert_path_to_project_dir_name(path: &Path) -> String {
         .collect()
 }
 
-/// Format an encoded project name into a short display name.
+/// Format a path into a short display name.
 ///
 /// For worktree paths like `/Users/raine/code/claude-history__worktrees/claude-search`,
 /// returns `claude-history/claude-search` to show both the main project and worktree name.
 ///
 /// For regular paths, returns just the folder name.
-fn format_project_short_name(encoded_name: &str) -> String {
-    // Get the decoded path (may or may not exist on filesystem)
-    let decoded_path = decode_project_dir_name_to_path(encoded_name);
-    let path_str = decoded_path.to_string_lossy();
+fn format_short_name_from_path(path: &Path) -> String {
+    let path_str = path.to_string_lossy();
 
-    // Check for worktree pattern in the decoded path (works even if path doesn't exist)
+    // Check for worktree pattern in the path
     if let Some(wt_pos) = path_str
         .find("__worktrees/")
         .or_else(|| path_str.find("/.worktrees/"))
@@ -216,171 +215,23 @@ fn format_project_short_name(encoded_name: &str) -> String {
     }
 
     // Not a worktree, just return the folder name
-    decoded_path
-        .file_name()
+    path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| encoded_name.to_string())
+        .unwrap_or_else(|| path_str.into_owned())
 }
 
-/// Try to decode a project directory name back to a valid path.
+/// Decode a project directory name back to a path (simple heuristic fallback).
 ///
 /// Claude's encoding replaces all non-alphanumeric characters (except `-`) with `-`.
 /// This means `/`, `_`, and `.` all become `-`, making the encoding lossy.
-/// Additionally, `-` in folder names is preserved, making it ambiguous with `/`.
 ///
-/// This function uses the filesystem to find which interpretation actually exists.
+/// This is only used as a fallback for old JSONL files that don't have the cwd field.
+/// The cwd field from JSONL provides the accurate path and should be preferred.
 fn decode_project_dir_name_to_path(encoded: &str) -> PathBuf {
-    // Try filesystem-guided decode first
-    if let Some(path) = decode_with_filesystem_check(encoded) {
-        return path;
-    }
-
-    // Fallback: simple decode (all single - become /, -- become __)
     PathBuf::from(decode_with_double_dash_as(encoded, "__"))
 }
 
-/// Decode by checking the filesystem to resolve ambiguous dashes.
-/// Uses a greedy approach: at each `-`, check if keeping it as `-` leads to a valid path.
-/// Special handling for worktree paths: after `__worktrees/`, keep remaining dashes as-is.
-fn decode_with_filesystem_check(encoded: &str) -> Option<PathBuf> {
-    if encoded.is_empty() || !encoded.starts_with('-') {
-        return None;
-    }
-
-    // Special handling for worktree paths
-    // Pattern: -...-<project>--worktrees-<worktree-name>
-    // The folder structure is: <parent>/<project>__worktrees/<worktree-name>
-    if let Some(wt_pos) = encoded.find("--worktrees-") {
-        // Decode the part before --worktrees using filesystem check
-        let before_wt = &encoded[..wt_pos];
-        let before_path = decode_path_segment_with_fs(before_wt)?;
-
-        // Get the project name (last component) and parent path
-        let project_name = before_path.file_name()?.to_string_lossy();
-        let parent_path = before_path.parent()?;
-
-        // The worktree folder name is everything after --worktrees-
-        // Keep dashes as-is since folder names can have dashes
-        let worktree_name = &encoded[wt_pos + "--worktrees-".len()..];
-
-        // Build: <parent>/<project>__worktrees/<worktree-name>
-        let worktrees_folder = format!("{}__worktrees", project_name);
-        let full_path = parent_path.join(worktrees_folder).join(worktree_name);
-
-        // Even if path doesn't exist (deleted worktree), return it
-        // The structure is correct
-        return Some(full_path);
-    }
-
-    // Non-worktree path: use filesystem-guided decode
-    decode_path_segment_with_fs(encoded)
-}
-
-/// Decode a path segment using filesystem checks to resolve ambiguous dashes.
-fn decode_path_segment_with_fs(encoded: &str) -> Option<PathBuf> {
-    if encoded.is_empty() {
-        return Some(PathBuf::from("/"));
-    }
-
-    let start = if encoded.starts_with('-') { 1 } else { 0 };
-    let rest = &encoded[start..];
-    let mut current_path = PathBuf::from("/");
-    let mut current_segment = String::new();
-
-    let chars: Vec<char> = rest.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        if c == '-' {
-            // Count consecutive dashes
-            let mut dash_count = 1;
-            while i + dash_count < chars.len() && chars[i + dash_count] == '-' {
-                dash_count += 1;
-            }
-
-            if dash_count >= 2 {
-                // Double dash: likely __ or /.
-                // Try __ first, then /. if that doesn't work
-                let test_path_underscore = current_path.join(format!("{}__", current_segment));
-                let test_path_dot = current_path.join(&current_segment).join(".");
-
-                if test_path_underscore.exists()
-                    || current_path
-                        .join(format!("{}_", current_segment))
-                        .read_dir()
-                        .ok()
-                        .map(|mut d| d.next().is_some())
-                        .unwrap_or(false)
-                {
-                    current_segment.push_str("__");
-                } else if test_path_dot.exists() {
-                    // Treat as /.
-                    if !current_segment.is_empty() {
-                        current_path = current_path.join(&current_segment);
-                        current_segment.clear();
-                    }
-                    current_segment.push('.');
-                } else {
-                    // Default to __
-                    current_segment.push_str("__");
-                }
-                i += 2;
-                // Handle remaining dashes if more than 2
-                for _ in 2..dash_count {
-                    current_segment.push('_');
-                    i += 1;
-                }
-            } else {
-                // Single dash: could be / or literal -
-                // Check if any folder exists that starts with this prefix
-                let has_dash_continuation = current_path
-                    .read_dir()
-                    .ok()
-                    .and_then(|entries| {
-                        let prefix = format!("{}-", current_segment);
-                        entries
-                            .filter_map(|e| e.ok())
-                            .any(|e| e.file_name().to_string_lossy().starts_with(&prefix))
-                            .then_some(())
-                    })
-                    .is_some();
-
-                if has_dash_continuation && !current_segment.is_empty() {
-                    // Keep dash as part of segment
-                    current_segment.push('-');
-                } else {
-                    // Treat as path separator
-                    if !current_segment.is_empty() {
-                        current_path = current_path.join(&current_segment);
-                        if !current_path.exists() {
-                            return None;
-                        }
-                        current_segment.clear();
-                    }
-                }
-                i += 1;
-            }
-        } else {
-            current_segment.push(c);
-            i += 1;
-        }
-    }
-
-    // Add final segment
-    if !current_segment.is_empty() {
-        current_path = current_path.join(&current_segment);
-    }
-
-    if current_path.exists() {
-        Some(current_path)
-    } else {
-        None
-    }
-}
-
-/// Decode with a specific replacement for double dashes (fallback method)
+/// Decode with a specific replacement for double dashes
 fn decode_with_double_dash_as(encoded: &str, double_dash_replacement: &str) -> String {
     let mut result = String::with_capacity(encoded.len());
     let mut chars = encoded.chars().peekable();
@@ -771,11 +622,10 @@ fn process_conversation_file(
             match entry {
                 LogEntry::User { message, cwd, .. } => {
                     // Extract cwd from the first user message that has it
-                    if extracted_cwd.is_none() {
-                        if let Some(cwd_str) = cwd {
+                    if extracted_cwd.is_none()
+                        && let Some(cwd_str) = cwd {
                             extracted_cwd = Some(PathBuf::from(cwd_str));
                         }
-                    }
 
                     let text = extract_text_from_user(&message);
                     if text.is_empty() {
