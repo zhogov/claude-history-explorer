@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+#[derive(Clone)]
 pub struct Conversation {
     pub path: PathBuf,
     pub index: usize,

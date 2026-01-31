@@ -3,8 +3,8 @@ mod cli;
 mod config;
 mod display;
 mod error;
-mod fzf;
 mod history;
+mod tui;
 
 use clap::Parser;
 use cli::Args;
@@ -75,32 +75,8 @@ fn run() -> Result<()> {
 
     // Determine how to load conversations based on mode
     let conversations = if args.global {
-        // Mode 1: Global Search (-g) - search all projects at once
+        // Global Search (-g) - search all projects at once
         history::load_all_conversations(show_last, args.debug)?
-    } else if args.all_projects {
-        // Mode 2: Browse Projects (-a) - select project first, then show conversations
-        let root = history::get_claude_projects_root()?;
-
-        if !root.exists() {
-            return Err(AppError::ProjectsDirNotFound(root.display().to_string()));
-        }
-
-        let projects = history::list_projects(&root)?;
-
-        if projects.is_empty() {
-            return Err(AppError::NoHistoryFound(root.display().to_string()));
-        }
-
-        let selected_project_name = fzf::select_project(&projects)?;
-        let projects_dir = root.join(selected_project_name);
-
-        if !projects_dir.exists() {
-            return Err(AppError::ProjectsDirNotFound(
-                projects_dir.display().to_string(),
-            ));
-        }
-
-        history::load_conversations(&projects_dir, show_last, args.debug)?
     } else {
         // Mode 3: Current Directory (Default)
         let current_dir = std::env::current_dir().map_err(|e| {
@@ -131,8 +107,11 @@ fn run() -> Result<()> {
         return Err(AppError::NoHistoryFound("selected scope".to_string()));
     }
 
-    // Use fzf to select a conversation
-    let selected_path = fzf::select_conversation(&conversations, use_relative_time)?;
+    // Use TUI to select a conversation
+    let selected_path = match tui::run(conversations.clone(), use_relative_time)? {
+        tui::Action::Select(path) => path,
+        tui::Action::Quit => return Err(AppError::SelectionCancelled),
+    };
 
     if args.show_path {
         println!("{}", selected_path.display());
