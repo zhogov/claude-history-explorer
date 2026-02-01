@@ -116,4 +116,12 @@ pub struct Args {
         help = "Search all conversations from all projects at once"
     )]
     pub global: bool,
+
+    /// Display output through a pager (less)
+    #[arg(long, group = "pager_display")]
+    pub pager: bool,
+
+    /// Disable pager output
+    #[arg(long, group = "pager_display")]
+    pub no_pager: bool,
 }

@@ -3,10 +3,11 @@ use crate::cli::DebugLevel;
 use crate::debug;
 use crate::debug_log;
 use crate::error::Result;
+use crate::pager;
 use colored::{ColoredString, Colorize, CustomColor};
 use crossterm::terminal;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 
 const NAME_WIDTH: usize = 9;
@@ -80,8 +81,9 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
 }
 
 /// Print lines in ledger format with a name on the first line and blank name column for continuations
-fn print_ledger_lines<F>(name: &str, style: F, text: &str, content_width: usize)
+fn print_ledger_lines<W, F>(writer: &mut W, name: &str, style: F, text: &str, content_width: usize)
 where
+    W: Write + ?Sized,
     F: Fn(&str) -> ColoredString,
 {
     let wrapped_lines = wrap_text(text, content_width);
@@ -90,21 +92,21 @@ where
         if i == 0 {
             // Pad the plain text first, then apply color to avoid ANSI escape code interference
             let padded = format!("{:>width$}", name, width = NAME_WIDTH);
-            print!("{}", style(&padded));
+            let _ = write!(writer, "{}", style(&padded));
         } else {
-            print!("{:>width$}", "", width = NAME_WIDTH);
+            let _ = write!(writer, "{:>width$}", "", width = NAME_WIDTH);
         }
-        print!("{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
-        println!("{}", line);
+        let _ = write!(writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+        let _ = writeln!(writer, "{}", line);
     }
 }
 
 /// Print continuation lines (for tool output, etc.) with dimmed content
-fn print_ledger_continuation(text: &str, content_width: usize) {
+fn print_ledger_continuation<W: Write + ?Sized>(writer: &mut W, text: &str, content_width: usize) {
     for line in wrap_text(text, content_width) {
-        print!("{:>width$}", "", width = NAME_WIDTH);
-        print!("{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
-        println!("{}", line.dimmed());
+        let _ = write!(writer, "{:>width$}", "", width = NAME_WIDTH);
+        let _ = write!(writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+        let _ = writeln!(writer, "{}", line.dimmed());
     }
 }
 
@@ -114,11 +116,27 @@ pub fn display_conversation(
     no_tools: bool,
     show_thinking: bool,
     debug_level: Option<DebugLevel>,
+    use_pager: bool,
 ) -> Result<()> {
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
     let terminal_width = get_terminal_width();
     let content_width = terminal_width.saturating_sub(NAME_WIDTH + SEPARATOR_WIDTH);
+
+    // Spawn pager if requested
+    let mut pager_child = if use_pager {
+        pager::spawn_pager().ok()
+    } else {
+        None
+    };
+
+    // Get writer - either pager stdin or stdout
+    let mut stdout_handle = io::stdout().lock();
+    let writer: &mut dyn Write = if let Some(ref mut child) = pager_child {
+        child.stdin.as_mut().unwrap()
+    } else {
+        &mut stdout_handle
+    };
 
     for (line_number, line_result) in reader.lines().enumerate() {
         let line = line_result?;
@@ -128,7 +146,7 @@ pub fn display_conversation(
 
         match serde_json::from_str::<LogEntry>(&line) {
             Ok(entry) => {
-                display_entry(&entry, no_tools, show_thinking, content_width);
+                display_entry(writer, &entry, no_tools, show_thinking, content_width);
             }
             Err(e) => {
                 debug::error(
@@ -147,10 +165,22 @@ pub fn display_conversation(
         }
     }
 
+    // Close stdin and wait for pager to finish
+    drop(stdout_handle);
+    if let Some(mut child) = pager_child {
+        let _ = child.wait();
+    }
+
     Ok(())
 }
 
-fn display_entry(entry: &LogEntry, no_tools: bool, show_thinking: bool, content_width: usize) {
+fn display_entry<W: Write + ?Sized>(
+    writer: &mut W,
+    entry: &LogEntry,
+    no_tools: bool,
+    show_thinking: bool,
+    content_width: usize,
+) {
     match entry {
         LogEntry::Summary { .. }
         | LogEntry::FileHistorySnapshot { .. }
@@ -161,8 +191,14 @@ fn display_entry(entry: &LogEntry, no_tools: bool, show_thinking: bool, content_
         LogEntry::User { message, .. } => match &message.content {
             UserContent::String(text) => {
                 if let Some(processed) = process_command_message(text) {
-                    print_ledger_lines("You", |s| s.white().bold(), &processed, content_width);
-                    println!();
+                    print_ledger_lines(
+                        writer,
+                        "You",
+                        |s| s.white().bold(),
+                        &processed,
+                        content_width,
+                    );
+                    let _ = writeln!(writer);
                 }
             }
             UserContent::Blocks(blocks) => {
@@ -172,6 +208,7 @@ fn display_entry(entry: &LogEntry, no_tools: bool, show_thinking: bool, content_
                         ContentBlock::Text { text } => {
                             if let Some(processed) = process_command_message(text) {
                                 print_ledger_lines(
+                                    writer,
                                     "You",
                                     |s| s.white().bold(),
                                     &processed,
@@ -183,6 +220,7 @@ fn display_entry(entry: &LogEntry, no_tools: bool, show_thinking: bool, content_
                         ContentBlock::ToolResult { content, .. } => {
                             if !no_tools {
                                 print_ledger_lines(
+                                    writer,
                                     "Tool",
                                     |s| s.custom_color(DIM_TEAL),
                                     "<Result>",
@@ -199,9 +237,13 @@ fn display_entry(entry: &LogEntry, no_tools: bool, show_thinking: bool, content_
                                         } else {
                                             "<invalid content>".to_string()
                                         };
-                                    print_ledger_continuation(&content_str, content_width);
+                                    print_ledger_continuation(writer, &content_str, content_width);
                                 } else {
-                                    print_ledger_continuation("<no content>", content_width);
+                                    print_ledger_continuation(
+                                        writer,
+                                        "<no content>",
+                                        content_width,
+                                    );
                                 }
                                 printed_content = true;
                             }
@@ -210,12 +252,12 @@ fn display_entry(entry: &LogEntry, no_tools: bool, show_thinking: bool, content_
                     }
                 }
                 if printed_content {
-                    println!();
+                    let _ = writeln!(writer);
                 }
             }
         },
         LogEntry::Assistant { message, .. } => {
-            display_assistant_message(message, no_tools, show_thinking, content_width);
+            display_assistant_message(writer, message, no_tools, show_thinking, content_width);
         }
     }
 }
@@ -252,7 +294,8 @@ impl<'a> From<&'a AssistantMessage> for FormattedMessage<'a> {
     }
 }
 
-fn display_assistant_message(
+fn display_assistant_message<W: Write + ?Sized>(
+    writer: &mut W,
     message: &AssistantMessage,
     no_tools: bool,
     show_thinking: bool,
@@ -264,6 +307,7 @@ fn display_assistant_message(
     // Print text blocks
     for text in formatted.text_blocks {
         print_ledger_lines(
+            writer,
             "Claude",
             |s| s.custom_color(TEAL).bold(),
             text,
@@ -277,13 +321,14 @@ fn display_assistant_message(
         for (tool_name, tool_input) in formatted.tool_calls {
             let tool_header = format!("<Calling: {}>", tool_name);
             print_ledger_lines(
+                writer,
                 "Claude",
                 |s| s.custom_color(DIM_TEAL),
                 &tool_header,
                 content_width,
             );
             if let Ok(formatted_input) = serde_json::to_string_pretty(tool_input) {
-                print_ledger_continuation(&formatted_input, content_width);
+                print_ledger_continuation(writer, &formatted_input, content_width);
             }
             printed_content = true;
         }
@@ -293,6 +338,7 @@ fn display_assistant_message(
     if show_thinking {
         for thought in formatted.thinking_steps {
             print_ledger_lines(
+                writer,
                 "Thinking",
                 |s| s.custom_color(DIM_TEAL),
                 thought,
@@ -304,7 +350,7 @@ fn display_assistant_message(
 
     // Only add blank line separator if we printed something
     if printed_content {
-        println!();
+        let _ = writeln!(writer);
     }
 }
 

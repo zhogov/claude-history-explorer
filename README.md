@@ -96,6 +96,8 @@ Options:
       --plain            Output plain text without ledger formatting
       --debug [<LEVEL>]  Print debug information (filter by level: debug, info, warn, error)
   -g, --global           Search all conversations from all projects at once
+      --pager            Display output through a pager (less)
+      --no-pager         Disable pager output
   -h, --help             Print help
 ```
 
@@ -138,6 +140,15 @@ You: How do I fix this bug?
 
 Claude: Looking at the code, the issue is...
 ```
+
+### pager output
+
+By default, conversation output is piped through a pager (`less -R`) when stdout
+is a terminal. This enables scrolling through long conversations. Use
+`--no-pager` to disable this behavior and print directly to stdout.
+
+The pager respects the `$PAGER` environment variable. If not set, it defaults to
+`less -R` (which preserves ANSI colors).
 
 ### global search
 
@@ -220,6 +231,9 @@ show_thinking = false
 
 # Use plain output without ledger formatting (default: false)
 plain = false
+
+# Use pager for output (default: true when stdout is a terminal)
+pager = true
 EOF
 ```
 
@@ -235,6 +249,8 @@ EOF
   (default: false)
 - `plain` (boolean): Output plain text without ledger formatting (default:
   false)
+- `pager` (boolean): Pipe output through a pager for scrolling (default: true
+  when stdout is a terminal)
 
 ### overriding config
 
@@ -244,6 +260,8 @@ Each display option has opposing flags for explicit override:
 - `--last` / `--first`
 - `--relative-time` / `--absolute-time`
 - `--hide-thinking` / `--show-thinking`
+- `--plain` (no opposite flag)
+- `--no-pager` / `--pager`
 
 For example, if your config has `no_tools = false` (showing tools), you can
 temporarily hide them with `--no-tools`.

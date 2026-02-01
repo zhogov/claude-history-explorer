@@ -6,11 +6,13 @@ mod debug_log;
 mod display;
 mod error;
 mod history;
+mod pager;
 mod tui;
 
 use clap::Parser;
 use cli::Args;
 use error::{AppError, Result};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -75,6 +77,12 @@ fn run() -> Result<()> {
         false,
     );
     let plain_mode = resolve_bool_setting(args.plain, false, display_config.plain, false);
+    let use_pager = resolve_bool_setting(
+        args.pager,
+        args.no_pager,
+        display_config.pager,
+        std::io::stdout().is_terminal(),
+    );
 
     // Determine how to load conversations based on mode
     let (conversations, selected_path) = if args.global {
@@ -176,7 +184,13 @@ fn run() -> Result<()> {
             args.debug,
         )?;
     } else {
-        display::display_conversation(&selected_path, !show_tools, show_thinking, args.debug)?;
+        display::display_conversation(
+            &selected_path,
+            !show_tools,
+            show_thinking,
+            args.debug,
+            use_pager,
+        )?;
     }
 
     Ok(())
