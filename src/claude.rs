@@ -38,7 +38,7 @@ pub enum LogEntry {
     #[allow(dead_code)]
     System {
         subtype: String,
-        level: String,
+        level: Option<String>,
         #[serde(flatten)]
         extra: serde_json::Value,
     },
