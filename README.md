@@ -1,37 +1,35 @@
 # claude-history
 
 ```
-% claude-history
-╭──────────────────────────────────────────────────────────────────────────────────╮
-│ > ▌                                                                              │
-│   19/19 ──────────────────────────────────────────────────────────────────────── │
-│ ▌ [0] 11 hours | Adding 1 card(s) to Anki... Successfully added 1 new note ··    │
-│   [1] 12 hours | ~/D/anki-llm-decks % anki-llm generate-init ... I can see the·· │
-│   [2] a day | Why? Manually editing hundreds or thousands of Anki cards is ted·· │
-│   [3] a day | Add disclaimer about pricing in ### Supported models that check ·· │
-│   [4] a day | @README.md Manually editing hundreds or thousands of Anki cards ·· │
-│   [5] a day | ~/c/anki-llm % identify logo.png logo.png PNG 756x238 756x238+0+·· │
-│   [6] 2 days | @src/commands/generate-init.ts Which model parameter does gener·· │
-│   [7] 2 days | @README.md Ask gemini what would be a good way to improve the r·· │
-╰──────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ ❯ harden                                                                     5/1136  │
+│──────────────────────────────────────────────────────────────────────────────────────│
+│ ▌ workmux/workmux-merge-cleanup-error                       150 msgs · Jan 14, 21:43 │
+│ ▌ ## Description Running `workmux merge` with a bare repository + linked worktrees … │
+│ ▌ …ktree Would you like me to apply the hardening (absolute path normalization) to…  │
+│──────────────────────────────────────────────────────────────────────────────────────│
+│ ▌ raine                                                      68 msgs · Jan 30, 19:36 │
+│ ▌ How can I sync my taskwarrior notes between devices? ... There are several approa… │
+│ ▌ …` user for the service - Add systemd hardening flags (`NoNewPrivileges`, `Priva…  │
+│──────────────────────────────────────────────────────────────────────────────────────│
+│ ▌ WalkingMate                                                 2 msgs · Jan 21, 19:25 │
+│ ▌ diff --git c/WalkingMate.xcodeproj/project.pbxproj i/WalkingMate.xcodeproj/projec… │
+│ ▌ …@@ ENABLE_APP_SANDBOX = YES; ENABLE_HARDENED_RUNTIME = YES; ENABLE_INCOMING_NE…   │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 `claude-history` is a companion CLI for Claude Code. It lets you search recent
-conversations recorded in Claude's local project history with an
-`fzf`-powered fuzzy finder, then prints the selected transcript in a tidy,
-readable format.
+conversations recorded in Claude's local project history with a built-in
+terminal UI, then prints the selected transcript in a tidy, readable format.
 
 Run it from the project directory you work on with Claude Code and it will
 discover the matching transcript folder automatically.
 
-[Install](#install) ·
-[Usage](#usage) ·
-[Configuration](#configuration) ·
+[Install](#install) · [Usage](#usage) · [Configuration](#configuration) ·
 [Changelog](CHANGELOG.md)
 
 ## requirements
 
-- [`fzf`](https://github.com/junegunn/fzf) available on your `PATH`
 - Claude Code conversation logs under `~/.claude/projects`
 
 ## install
@@ -56,49 +54,54 @@ Run the tool from inside the project directory you're interested in:
 $ claude-history
 ```
 
-This opens an `fzf` session listing all conversations, newest first. The search
-matches against the entire transcript; the preview shows the first three
-messages by default.
+This opens a terminal UI listing all conversations, sorted by recency. Type to
+search across all transcripts. Each item shows a preview of the conversation and
+match context is highlighted when your search matches content not visible in the
+preview.
 
-### search syntax
+### keyboard navigation
 
-The fuzzy finder supports fzf's extended search syntax:
+| Key                     | Action                    |
+| ----------------------- | ------------------------- |
+| `↑` / `↓`               | Move selection            |
+| `Ctrl+P` / `Ctrl+N`     | Move selection (vi-style) |
+| `Page Up` / `Page Down` | Jump by page              |
+| `Home` / `End`          | Jump to first/last        |
+| `Enter`                 | Select conversation       |
+| `Esc` / `Ctrl+C`        | Quit                      |
 
-| Token    | Match type  | Example                                   |
-|----------|-------------|-------------------------------------------|
-| `'word`  | Exact match | `'error` matches "error" exactly          |
-| `!word`  | Exclude     | `!test` excludes results containing "test"|
-| `a \| b` | OR          | `'error \| 'warning` matches either term  |
-| `a b`    | AND         | `'error 'api` matches both terms          |
+### search
 
-Combine these for precise searches: `'deploy 'production !staging` finds
-conversations mentioning both "deploy" and "production" but not "staging".
+Search is case-insensitive substring matching. Results are ranked by a
+combination of match frequency and recency, so recent conversations with more
+matches appear first.
 
 ```
-View Claude conversation history with fuzzy search
+View Claude conversation history
 
 Usage: claude-history [OPTIONS]
 
 Options:
-  -t, --show-tools     Show tool calls in the conversation output
-      --no-tools       Hide tool calls from the conversation output
-  -d, --show-dir       Print the conversation directory path and exit
-  -l, --last           Show the last messages in the fuzzy finder preview
-      --first          Show the first messages in the fuzzy finder preview
-  -r, --relative-time  Display relative time (e.g. "10 minutes ago")
-      --absolute-time  Display absolute timestamp
-      --show-thinking  Show thinking blocks in the conversation output
-      --hide-thinking  Hide thinking blocks from the conversation output
-  -c, --resume         Resume the selected conversation in Claude Code
-  -a, --all-projects   Browse conversations from all projects (select project first)
-  -g, --global         Search all conversations from all projects at once
-  -h, --help           Print help
+  -t, --show-tools       Show tool calls in the conversation output
+      --no-tools         Hide tool calls from the conversation output
+  -d, --show-dir         Print the conversation directory path and exit
+  -l, --last             Show the last messages in the TUI preview
+      --first            Show the first messages in the TUI preview
+  -r, --relative-time    Display relative time (e.g. "10 minutes ago")
+      --absolute-time    Display absolute timestamp
+      --show-thinking    Show thinking blocks in the conversation output
+      --hide-thinking    Hide thinking blocks from the conversation output
+  -c, --resume           Resume the selected conversation in Claude Code
+  -p, --show-path        Print the selected conversation file path
+      --debug [<LEVEL>]  Print debug information (filter by level: debug, info, warn, error)
+  -g, --global           Search all conversations from all projects at once
+  -h, --help             Print help
 ```
 
 ### preview modes
 
-- `claude-history` shows the first three messages in the preview
-- `claude-history --last` flips the preview to the last three messages.
+- `claude-history` shows the first messages in the preview
+- `claude-history --last` flips the preview to the last messages
 
 ### showing tool calls
 
@@ -109,32 +112,14 @@ display them when you want to see what tools Claude used.
 ### showing thinking blocks
 
 Extended thinking models (like Claude Sonnet 4.5) include reasoning steps in
-their output. By default, these thinking blocks are hidden to keep
-conversations focused. Use `--show-thinking` to display them when you want to
-see Claude's reasoning process.
+their output. By default, these thinking blocks are hidden to keep conversations
+focused. Use `--show-thinking` to display them when you want to see Claude's
+reasoning process.
 
 ### resuming conversations
 
 If you want to continue a conversation, launch `claude-history` with `--resume`
 and it will hand off to `claude --resume <conversation-id>`.
-
-### browsing all projects
-
-By default, `claude-history` only shows conversations from the current directory's
-project. Use `--all-projects` (or `-a`) to browse conversations from any project:
-
-```sh
-$ claude-history --all-projects
-```
-
-This first shows an fzf selector with all projects that have conversation history,
-sorted by most recently modified. After selecting a project, you'll see the usual
-conversation selector.
-
-Note: Project paths are decoded from Claude's internal format using a heuristic.
-Claude encodes paths by replacing `/`, `_`, and `.` with `-`, which is lossy.
-The displayed paths may not be exact (e.g., single underscores may appear as `/`),
-but should be recognizable enough to identify your projects.
 
 ### global search
 
@@ -144,15 +129,17 @@ Use `--global` (or `-g`) to search all conversations from all projects at once:
 $ claude-history --global
 ```
 
-This displays all conversations from every project in a single fzf view, sorted by
-modification time (newest first). Each conversation is prefixed with its project path
-so you can identify which project it belongs to.
+This displays all conversations from every project in a single view, sorted by
+modification time (newest first). Each conversation shows its project path so
+you can identify which project it belongs to. Conversations load in the
+background so you can start typing immediately.
 
-For [workmux](https://github.com/raine/workmux) users, worktree paths are displayed in
-a compact format: `[project/worktree]` instead of just the worktree folder name.
+For [workmux](https://github.com/raine/workmux) users, worktree paths are
+displayed in a compact format: `[project/worktree]` instead of just the worktree
+folder name.
 
-The `--resume` flag works with global search. It will automatically run Claude in the
-correct project directory for the selected conversation.
+The `--resume` flag works with global search. It will automatically run Claude
+in the correct project directory for the selected conversation.
 
 ### integration with other scripts
 
@@ -160,8 +147,8 @@ You can integrate `claude-history` into other tools to pass conversation context
 to new Claude Code sessions. This is useful when you want Claude to understand
 what you were working on previously.
 
-For example, a commit message generator script could use the conversation history
-to write more contextual commit messages:
+For example, a commit message generator script could use the conversation
+history to write more contextual commit messages:
 
 ```bash
 # Get conversation history if --context flag is set
@@ -191,7 +178,9 @@ claude -p "$prompt"
 
 ## configuration
 
-You can set default preferences for display options in `~/.config/claude-history/config.toml`. Command-line flags will override these settings.
+You can set default preferences for display options in
+`~/.config/claude-history/config.toml`. Command-line flags will override these
+settings.
 
 Create the config file:
 
@@ -202,7 +191,7 @@ cat > ~/.config/claude-history/config.toml << 'EOF'
 # Show tool calls in output (default: false)
 no_tools = false
 
-# Show last messages in preview (default: false)
+# Show last messages in TUI preview (default: false)
 last = false
 
 # Use relative time formatting (default: false)
@@ -215,10 +204,14 @@ EOF
 
 ### available options
 
-- `no_tools` (boolean): When false, shows tool calls; when true, hides them (default: false means tools are hidden)
-- `last` (boolean): Show last messages instead of first in fuzzy finder preview (default: false)
-- `relative_time` (boolean): Display relative time instead of absolute timestamp (default: false)
-- `show_thinking` (boolean): Show thinking blocks in conversation output (default: false)
+- `no_tools` (boolean): When false, shows tool calls; when true, hides them
+  (default: false means tools are hidden)
+- `last` (boolean): Show last messages instead of first in TUI preview (default:
+  false)
+- `relative_time` (boolean): Display relative time instead of absolute timestamp
+  (default: false)
+- `show_thinking` (boolean): Show thinking blocks in conversation output
+  (default: false)
 
 ### overriding config
 
@@ -229,7 +222,8 @@ Each display option has opposing flags for explicit override:
 - `--relative-time` / `--absolute-time`
 - `--hide-thinking` / `--show-thinking`
 
-For example, if your config has `no_tools = false` (showing tools), you can temporarily hide them with `--no-tools`.
+For example, if your config has `no_tools = false` (showing tools), you can
+temporarily hide them with `--no-tools`.
 
 ## filtering details
 
@@ -252,6 +246,9 @@ This runs `cargo fmt`, `cargo clippy --fix`, and `cargo build` in parallel.
 
 ## Related projects
 
-- [workmux](https://github.com/raine/workmux) — Git worktrees + tmux windows for parallel AI agent workflows
-- [consult-llm-mcp](https://github.com/raine/consult-llm-mcp) — MCP server that lets Claude Code consult stronger AI models (o3, Gemini, GPT-5.1 Codex)
-- [tmux-file-picker](https://github.com/raine/tmux-file-picker) — Pop up fzf in tmux to quickly insert file paths, perfect for AI coding assistants
+- [workmux](https://github.com/raine/workmux) — Git worktrees + tmux windows for
+  parallel AI agent workflows
+- [consult-llm-mcp](https://github.com/raine/consult-llm-mcp) — MCP server that
+  lets Claude Code consult stronger AI models (o3, Gemini, GPT-5.1 Codex)
+- [tmux-file-picker](https://github.com/raine/tmux-file-picker) — Pop up fzf in
+  tmux to quickly insert file paths, perfect for AI coding assistants

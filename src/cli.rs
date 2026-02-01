@@ -41,7 +41,7 @@ impl fmt::Display for DebugLevel {
 
 #[derive(Parser, Debug)]
 #[command(name = "claude-history")]
-#[command(about = "View Claude conversation history with fuzzy search")]
+#[command(about = "View Claude conversation history")]
 pub struct Args {
     /// Show tool calls in the conversation output
     #[arg(long, short = 't', group = "tools_display")]
@@ -59,11 +59,11 @@ pub struct Args {
     )]
     pub show_dir: bool,
 
-    /// Show the last messages in the fuzzy finder preview
+    /// Show the last messages in the TUI preview
     #[arg(long, short = 'l', group = "preview_content")]
     pub last: bool,
 
-    /// Show the first messages in the fuzzy finder preview
+    /// Show the first messages in the TUI preview
     #[arg(long, group = "preview_content")]
     pub first: bool,
 
