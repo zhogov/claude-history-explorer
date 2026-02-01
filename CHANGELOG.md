@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.14 (2026-02-01)
+
+- Added markdown rendering for conversation output with support for headings,
+  lists, code blocks, tables, and inline formatting
+- Added pager support—long conversations now open in `less` (or `$PAGER`)
+- Added `--plain` flag for unformatted output
+- Improved search to better match word variations (e.g., "config" now matches
+  "configuration")
+- Added `curl | bash` install script
+- Hide caveat metadata from conversation previews
+
 ## v0.1.13 (2026-02-01)
 
 - Replaced fzf with a built-in terminal UI
