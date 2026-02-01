@@ -163,6 +163,14 @@ impl App {
                 None
             }
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+            KeyCode::Char('n') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.select_next();
+                None
+            }
+            KeyCode::Char('p') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.select_prev();
+                None
+            }
             KeyCode::Char(c) => {
                 self.query.push(c);
                 self.update_filter();
