@@ -91,11 +91,11 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(input, area);
 
-    // Position cursor after the query text (account for " ❯ " prefix)
+    // Position cursor at cursor_pos (account for " ❯ " prefix)
     if area.width > 3 {
-        let query_width = app.query().chars().count() as u16;
+        let cursor_offset = app.cursor_pos() as u16;
         let max_x = area.x + area.width.saturating_sub(2);
-        let cursor_x = (area.x + 3).saturating_add(query_width).min(max_x);
+        let cursor_x = (area.x + 3).saturating_add(cursor_offset).min(max_x);
         frame.set_cursor_position(Position::new(cursor_x, area.y));
     }
 }

@@ -49,6 +49,8 @@ pub struct App {
     selected: Option<usize>,
     /// Current search query
     query: String,
+    /// Cursor position in query (character index, not byte)
+    cursor_pos: usize,
     /// Whether to use relative time display
     use_relative_time: bool,
     /// Loading state
@@ -70,6 +72,7 @@ impl App {
             filtered,
             selected,
             query: String::new(),
+            cursor_pos: 0,
             use_relative_time,
             loading_state: LoadingState::Ready,
             mode: Mode::Normal,
@@ -84,6 +87,7 @@ impl App {
             filtered: Vec::new(),
             selected: None,
             query: String::new(),
+            cursor_pos: 0,
             use_relative_time,
             loading_state: LoadingState::Loading { loaded: 0 },
             mode: Mode::Normal,
@@ -246,6 +250,25 @@ impl App {
         &self.mode
     }
 
+    pub fn cursor_pos(&self) -> usize {
+        self.cursor_pos
+    }
+
+    /// Move cursor left by one character
+    fn cursor_left(&mut self) {
+        if self.cursor_pos > 0 {
+            self.cursor_pos -= 1;
+        }
+    }
+
+    /// Move cursor right by one character
+    fn cursor_right(&mut self) {
+        let len = self.query.chars().count();
+        if self.cursor_pos < len {
+            self.cursor_pos += 1;
+        }
+    }
+
     /// Remove the currently selected conversation from the UI list.
     /// This should only be called after the file has been successfully deleted from disk.
     /// Handles index management for conversations, searchable, and filtered vectors.
@@ -311,6 +334,14 @@ impl App {
                 KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
                     Some(Action::Quit)
                 }
+                KeyCode::Left => {
+                    self.cursor_left();
+                    None
+                }
+                KeyCode::Right => {
+                    self.cursor_right();
+                    None
+                }
                 KeyCode::Up => {
                     self.select_prev();
                     None
@@ -337,11 +368,34 @@ impl App {
                 }
                 // Allow typing during loading - query is buffered for when loading finishes
                 KeyCode::Char(c) => {
-                    self.query.push(c);
+                    // Insert at cursor position
+                    let byte_pos = self
+                        .query
+                        .char_indices()
+                        .nth(self.cursor_pos)
+                        .map(|(i, _)| i)
+                        .unwrap_or(self.query.len());
+                    self.query.insert(byte_pos, c);
+                    self.cursor_pos += 1;
                     None
                 }
                 KeyCode::Backspace => {
-                    self.query.pop();
+                    if self.cursor_pos > 0
+                        && let Some((byte_pos, _)) =
+                            self.query.char_indices().nth(self.cursor_pos - 1)
+                    {
+                        self.query.remove(byte_pos);
+                        self.cursor_pos -= 1;
+                    }
+                    None
+                }
+                KeyCode::Delete => {
+                    let len = self.query.chars().count();
+                    if self.cursor_pos < len
+                        && let Some((byte_pos, _)) = self.query.char_indices().nth(self.cursor_pos)
+                    {
+                        self.query.remove(byte_pos);
+                    }
                     None
                 }
                 _ => None,
@@ -352,6 +406,14 @@ impl App {
         match code {
             KeyCode::Esc => Some(Action::Quit),
             KeyCode::Enter => self.get_selected_path().map(Action::Select),
+            KeyCode::Left => {
+                self.cursor_left();
+                None
+            }
+            KeyCode::Right => {
+                self.cursor_right();
+                None
+            }
             KeyCode::Up => {
                 self.select_prev();
                 None
@@ -392,19 +454,36 @@ impl App {
                 None
             }
             KeyCode::Char(c) => {
-                self.query.push(c);
+                // Insert at cursor position
+                let byte_pos = self
+                    .query
+                    .char_indices()
+                    .nth(self.cursor_pos)
+                    .map(|(i, _)| i)
+                    .unwrap_or(self.query.len());
+                self.query.insert(byte_pos, c);
+                self.cursor_pos += 1;
                 self.update_filter();
                 None
             }
             KeyCode::Backspace => {
-                self.query.pop();
+                if self.cursor_pos > 0
+                    && let Some((byte_pos, _)) = self.query.char_indices().nth(self.cursor_pos - 1)
+                {
+                    self.query.remove(byte_pos);
+                    self.cursor_pos -= 1;
+                }
                 self.update_filter();
                 None
             }
             KeyCode::Delete => {
-                if self.get_selected_path().is_some() {
-                    self.mode = Mode::ConfirmDelete;
+                let len = self.query.chars().count();
+                if self.cursor_pos < len
+                    && let Some((byte_pos, _)) = self.query.char_indices().nth(self.cursor_pos)
+                {
+                    self.query.remove(byte_pos);
                 }
+                self.update_filter();
                 None
             }
             _ => None,
