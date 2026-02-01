@@ -141,6 +141,7 @@ Claude's responses are rendered with basic markdown formatting:
 - **Lists** (ordered and unordered) maintain their structure
 - **Headings** are rendered with # prefixes and emphasized styling
 - **Blockquotes** appear in green with > prefix
+- **Tables** are rendered with box-drawing characters for clean alignment
 
 This makes Claude's formatted responses much more readable in the terminal. Use
 `--plain` to disable markdown rendering and get raw text output.
