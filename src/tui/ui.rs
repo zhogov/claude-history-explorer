@@ -46,11 +46,8 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
     let count_len = status_text.chars().count() + 1; // +1 for trailing space
     let padding = (area.width as usize).saturating_sub(left_len + count_len + 1);
 
-    let prompt_style = if app.is_loading() {
-        Style::default().fg(Color::Rgb(100, 100, 100)) // Dimmed while loading
-    } else {
-        Style::default().fg(Color::Rgb(78, 201, 176))
-    };
+    // Prompt is always active - user can type during loading
+    let prompt_style = Style::default().fg(Color::Rgb(78, 201, 176));
 
     let status_style = if app.is_loading() {
         Style::default().fg(Color::Rgb(78, 201, 176)) // Highlight loading status

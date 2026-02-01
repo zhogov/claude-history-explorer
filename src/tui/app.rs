@@ -112,15 +112,21 @@ impl App {
         // Now precompute search text (only once, at the end)
         self.searchable = search::precompute_search_text(&self.conversations);
 
-        // Reset filtered to all indices
-        self.filtered = (0..self.conversations.len()).collect();
-        self.selected = if self.filtered.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
-
         self.loading_state = LoadingState::Ready;
+
+        // Apply any query that was typed during loading
+        if self.query.is_empty() {
+            // Reset filtered to all indices
+            self.filtered = (0..self.conversations.len()).collect();
+            self.selected = if self.filtered.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+        } else {
+            // User typed during loading, apply the filter now
+            self.update_filter();
+        }
     }
 
     /// Consume the app and return its conversations
@@ -224,7 +230,7 @@ impl App {
 
     /// Handle a key event, returns Some(Action) if the app should exit
     fn handle_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
-        // During loading, allow navigation and quit but not search or selection
+        // During loading, allow navigation and typing but not Enter selection
         if self.is_loading() {
             return match code {
                 KeyCode::Esc => Some(Action::Quit),
@@ -253,6 +259,15 @@ impl App {
                 }
                 KeyCode::PageDown => {
                     self.select_page_down();
+                    None
+                }
+                // Allow typing during loading - query is buffered for when loading finishes
+                KeyCode::Char(c) => {
+                    self.query.push(c);
+                    None
+                }
+                KeyCode::Backspace => {
+                    self.query.pop();
                     None
                 }
                 _ => None,
