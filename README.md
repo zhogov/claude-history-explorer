@@ -55,6 +55,7 @@ preview.
 | `Page Up` / `Page Down` | Jump by page              |
 | `Home` / `End`          | Jump to first/last        |
 | `Enter`                 | Select conversation       |
+| `Ctrl+R`                | Resume conversation       |
 | `Ctrl+D`                | Delete conversation       |
 | `Esc` / `Ctrl+C`        | Quit                      |
 

@@ -16,6 +16,7 @@ use std::time::Duration;
 pub enum Action {
     Select(PathBuf),
     Delete(PathBuf),
+    Resume(PathBuf),
     Quit,
 }
 
@@ -462,6 +463,9 @@ impl App {
                 }
                 None
             }
+            KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.get_selected_path().map(Action::Resume)
+            }
             KeyCode::Char(c) => {
                 // Insert at cursor position
                 let byte_pos = self
@@ -577,6 +581,10 @@ pub fn run(conversations: Vec<Conversation>, use_relative_time: bool) -> Result<
                         // Continue the loop (don't exit TUI)
                     }
                     Action::Select(ref path) => {
+                        let _ = debug_log::log_selected_path(path);
+                        return Ok(action);
+                    }
+                    Action::Resume(ref path) => {
                         let _ = debug_log::log_selected_path(path);
                         return Ok(action);
                     }

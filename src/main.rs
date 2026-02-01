@@ -92,6 +92,12 @@ fn run() -> Result<()> {
 
         match tui::run_with_loader(rx, use_relative_time)? {
             (tui::Action::Select(path), convs) => (convs, path),
+            (tui::Action::Resume(path), convs) => {
+                let conv = convs.iter().find(|c| c.path == path);
+                let project_path = conv.and_then(|c| c.project_path.as_ref());
+                resume_with_claude(&path, project_path)?;
+                return Ok(());
+            }
             (tui::Action::Quit, _) => return Err(AppError::SelectionCancelled),
             (tui::Action::Delete(_), _) => unreachable!("Delete is handled internally"),
         }
@@ -126,6 +132,12 @@ fn run() -> Result<()> {
 
         match tui::run(conversations.clone(), use_relative_time)? {
             tui::Action::Select(path) => (conversations, path),
+            tui::Action::Resume(path) => {
+                let conv = conversations.iter().find(|c| c.path == path);
+                let project_path = conv.and_then(|c| c.project_path.as_ref());
+                resume_with_claude(&path, project_path)?;
+                return Ok(());
+            }
             tui::Action::Quit => return Err(AppError::SelectionCancelled),
             tui::Action::Delete(_) => unreachable!("Delete is handled internally"),
         }
