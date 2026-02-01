@@ -1,0 +1,609 @@
+//! JSONL conversation file parsing.
+//!
+//! This module handles parsing Claude conversation JSONL files and extracting
+//! conversation metadata like preview text, message counts, and working directory.
+
+use super::{Conversation, ParseError};
+use crate::claude::{LogEntry, extract_text_from_assistant, extract_text_from_user};
+use crate::cli::DebugLevel;
+use crate::debug;
+use crate::error::Result;
+use chrono::{DateTime, Local};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+use std::time::SystemTime;
+
+/// Process a single conversation file and extract all necessary information
+pub fn process_conversation_file(
+    path: PathBuf,
+    show_last: bool,
+    modified: Option<SystemTime>,
+    debug_level: Option<DebugLevel>,
+) -> Result<Option<Conversation>> {
+    let file = File::open(&path)?;
+    let reader = BufReader::new(file);
+    process_conversation_reader(path, reader, show_last, modified, debug_level)
+}
+
+/// Process a conversation from any BufRead source (for testability)
+pub(crate) fn process_conversation_reader<R: BufRead>(
+    path: PathBuf,
+    reader: R,
+    show_last: bool,
+    modified: Option<SystemTime>,
+    debug_level: Option<DebugLevel>,
+) -> Result<Option<Conversation>> {
+    let filename = path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("unknown");
+
+    // Collect all lines for context access when logging parse errors
+    let lines: Vec<String> = reader.lines().map_while(|l| l.ok()).collect();
+
+    let mut all_parts = Vec::new();
+    let mut preview_parts = Vec::new();
+    let mut user_messages = Vec::new();
+    let mut seen_real_user_message = false;
+    let mut skip_next_assistant = false;
+    let mut extracted_cwd: Option<PathBuf> = None;
+    let mut message_count: usize = 0;
+    let mut parse_errors: Vec<ParseError> = Vec::new();
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<LogEntry>(line) {
+            Ok(entry) => {
+                // Extract text content
+                match entry {
+                    LogEntry::User { message, cwd, .. } => {
+                        // Extract cwd from the first user message that has it
+                        if extracted_cwd.is_none()
+                            && let Some(cwd_str) = cwd
+                        {
+                            extracted_cwd = Some(PathBuf::from(cwd_str));
+                        }
+
+                        let text = extract_text_from_user(&message);
+                        if text.is_empty() {
+                            continue;
+                        }
+
+                        user_messages.push(text.clone());
+
+                        if is_clear_metadata_message(&text) {
+                            continue;
+                        }
+
+                        all_parts.push(text.clone());
+
+                        // Check if this is a warmup message (first user message is "Warmup")
+                        let is_warmup = !seen_real_user_message && text.trim() == "Warmup";
+                        if is_warmup {
+                            skip_next_assistant = true;
+                        } else {
+                            message_count += 1;
+                            preview_parts.push(text);
+                            seen_real_user_message = true;
+                        }
+                    }
+                    LogEntry::Assistant { message, .. } => {
+                        let text = extract_text_from_assistant(&message);
+                        if !text.is_empty() {
+                            all_parts.push(text.clone());
+
+                            // Skip this assistant message if it follows a warmup user message
+                            if skip_next_assistant {
+                                skip_next_assistant = false;
+                            } else if seen_real_user_message {
+                                // Only add assistant messages to preview after we've seen a real user message
+                                message_count += 1;
+                                preview_parts.push(text);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Err(e) => {
+                // Capture parse error with surrounding context
+                let start = line_idx.saturating_sub(2);
+                let context_before: Vec<String> = lines[start..line_idx].to_vec();
+                let end = (line_idx + 3).min(lines.len());
+                let context_after: Vec<String> = lines[line_idx + 1..end].to_vec();
+
+                parse_errors.push(ParseError {
+                    line_number: line_idx + 1, // 1-indexed for display
+                    line_content: line.clone(),
+                    error_message: e.to_string(),
+                    context_before,
+                    context_after,
+                });
+
+                debug::warn(
+                    debug_level,
+                    &format!(
+                        "Parse error in {} at line {}: {}",
+                        filename,
+                        line_idx + 1,
+                        e
+                    ),
+                );
+            }
+        }
+    }
+
+    // Check if this is a clear-only conversation or if preview is empty after filtering
+    if is_clear_only_conversation(&user_messages) {
+        debug::debug(
+            debug_level,
+            &format!("Filtered {}: clear-only conversation", filename),
+        );
+        return Ok(None);
+    }
+
+    if all_parts.is_empty() || preview_parts.is_empty() {
+        debug::debug(
+            debug_level,
+            &format!(
+                "Filtered {}: empty conversation (all_parts={}, preview_parts={})",
+                filename,
+                all_parts.len(),
+                preview_parts.len()
+            ),
+        );
+        return Ok(None);
+    }
+
+    // Use file modification time, falling back to current time if unavailable
+    let timestamp = modified
+        .map(DateTime::<Local>::from)
+        .unwrap_or_else(Local::now);
+
+    // Create preview (first or last 3 messages)
+    // Skip leading assistant messages by using preview_parts instead of all_parts
+    let preview = if show_last {
+        preview_parts
+            .iter()
+            .rev()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ... ")
+    } else {
+        preview_parts
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ... ")
+    };
+
+    // Create full text for searching (all messages)
+    let full_text = all_parts.join(" ");
+
+    // Normalize whitespace
+    let preview = normalize_whitespace(&preview);
+    let full_text = normalize_whitespace(&full_text);
+
+    Ok(Some(Conversation {
+        path,
+        index: 0,
+        timestamp,
+        preview,
+        full_text,
+        project_name: None,
+        project_path: None,
+        cwd: extracted_cwd,
+        message_count,
+        parse_errors,
+    }))
+}
+
+/// Detects metadata emitted by the /clear command wrapper messages
+pub(crate) fn is_clear_metadata_message(message: &str) -> bool {
+    let trimmed = message.trim();
+
+    trimmed.is_empty()
+        || trimmed.starts_with(
+            "Caveat: The messages below were generated by the user while running local commands.",
+        )
+        || trimmed.contains("<local-command-caveat>")
+        || trimmed.contains("<command-name>/clear</command-name>")
+        || trimmed.contains("<command-message>clear</command-message>")
+        || trimmed.contains("<local-command-stdout>")
+        || trimmed.contains("<command-args>")
+}
+
+/// Check if a conversation only contains /clear command messages
+pub(crate) fn is_clear_only_conversation(user_messages: &[String]) -> bool {
+    if user_messages.is_empty() {
+        return false;
+    }
+
+    let mut saw_caveat = false;
+    let mut saw_command = false;
+    let mut saw_stdout = false;
+
+    for msg in user_messages {
+        let trimmed = msg.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let is_caveat = trimmed.starts_with(
+            "Caveat: The messages below were generated by the user while running local commands.",
+        );
+        let has_command_tag = trimmed.contains("<command-name>/clear</command-name>");
+        let has_stdout_tag = trimmed.contains("<local-command-stdout>");
+
+        if is_caveat {
+            saw_caveat = true;
+        }
+        if has_command_tag {
+            saw_command = true;
+        }
+        if has_stdout_tag {
+            saw_stdout = true;
+        }
+
+        // Any substantive user message immediately disqualifies this from being clear-only
+        if !(is_caveat || has_command_tag || has_stdout_tag) {
+            return false;
+        }
+    }
+
+    saw_caveat && saw_command && saw_stdout
+}
+
+/// Normalize whitespace in a string
+pub(crate) fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<&str>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Helper to create a user message JSON line
+    fn user_msg(text: &str, cwd: Option<&str>) -> String {
+        let cwd_json = match cwd {
+            Some(c) => format!(r#""cwd": "{}","#, c),
+            None => String::new(),
+        };
+        format!(
+            r#"{{"type": "user", "timestamp": "2024-01-01T00:00:00Z", {}  "message": {{"role": "user", "content": "{}"}}}}"#,
+            cwd_json, text
+        )
+    }
+
+    /// Helper to create an assistant message JSON line
+    fn assistant_msg(text: &str) -> String {
+        format!(
+            r#"{{"type": "assistant", "timestamp": "2024-01-01T00:00:00Z", "message": {{"role": "assistant", "content": [{{"type": "text", "text": "{}"}}]}}}}"#,
+            text
+        )
+    }
+
+    /// Helper to parse JSONL content
+    fn parse_jsonl(content: &str) -> Result<Option<Conversation>> {
+        let reader = Cursor::new(content);
+        process_conversation_reader(
+            PathBuf::from("test.jsonl"),
+            reader,
+            false, // show_last
+            None,  // modified
+            None,  // debug_level
+        )
+    }
+
+    // === Warmup message filtering ===
+
+    #[test]
+    fn filters_warmup_messages_from_preview() {
+        let content = [
+            user_msg("Warmup", None),
+            assistant_msg("Ready"),
+            user_msg("Hello world", None),
+            assistant_msg("Hi there"),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+
+        // Preview should NOT include the warmup exchange
+        assert!(!conv.preview.contains("Warmup"));
+        assert!(!conv.preview.contains("Ready"));
+        assert!(conv.preview.contains("Hello world"));
+        assert!(conv.preview.contains("Hi there"));
+
+        // But full_text SHOULD include warmup content for searching
+        assert!(conv.full_text.contains("Warmup"));
+        assert!(conv.full_text.contains("Ready"));
+    }
+
+    #[test]
+    fn warmup_only_conversation_excluded_from_preview_but_preserved() {
+        // A conversation with only warmup should still be valid if it has content
+        let content = [
+            user_msg("Warmup", None),
+            assistant_msg("Ready"),
+            user_msg("Actual question", None),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        assert!(!conv.preview.contains("Warmup"));
+        assert!(conv.preview.contains("Actual question"));
+    }
+
+    // === Clear command filtering ===
+
+    #[test]
+    fn filters_clear_only_conversations() {
+        let content = [
+            user_msg(
+                "Caveat: The messages below were generated by the user while running local commands.",
+                None,
+            ),
+            user_msg("<command-name>/clear</command-name>", None),
+            user_msg("<local-command-stdout></local-command-stdout>", None),
+        ]
+        .join("\n");
+
+        let result = parse_jsonl(&content).unwrap();
+        assert!(
+            result.is_none(),
+            "Clear-only conversation should be filtered"
+        );
+    }
+
+    #[test]
+    fn preserves_clear_command_in_mixed_conversation() {
+        let content = [
+            user_msg("Hello", None),
+            assistant_msg("Hi"),
+            user_msg(
+                "Caveat: The messages below were generated by the user while running local commands.",
+                None,
+            ),
+            user_msg("<command-name>/clear</command-name>", None),
+            user_msg("Another question", None),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        // The conversation should be preserved since it has real content
+        assert!(conv.preview.contains("Hello"));
+        assert!(conv.preview.contains("Another question"));
+    }
+
+    // === CWD extraction ===
+
+    #[test]
+    fn extracts_cwd_from_first_user_message() {
+        let content = [
+            user_msg("Hello", Some("/home/user/project")),
+            assistant_msg("Hi"),
+            user_msg("More", Some("/other/path")),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        assert_eq!(
+            conv.cwd,
+            Some(PathBuf::from("/home/user/project")),
+            "Should extract cwd from first user message"
+        );
+    }
+
+    #[test]
+    fn handles_missing_cwd() {
+        let content = [user_msg("Hello", None), assistant_msg("Hi")].join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        assert!(conv.cwd.is_none());
+    }
+
+    // === Empty conversation handling ===
+
+    #[test]
+    fn handles_empty_conversation() {
+        let content = "";
+        let result = parse_jsonl(content).unwrap();
+        assert!(result.is_none(), "Empty conversation should return None");
+    }
+
+    #[test]
+    fn handles_only_whitespace() {
+        let content = "\n\n   \n\n";
+        let result = parse_jsonl(content).unwrap();
+        assert!(result.is_none());
+    }
+
+    // === Message counting ===
+
+    #[test]
+    fn counts_messages_correctly() {
+        let content = [
+            user_msg("First", None),
+            assistant_msg("Response 1"),
+            user_msg("Second", None),
+            assistant_msg("Response 2"),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        assert_eq!(conv.message_count, 4, "Should count 4 messages");
+    }
+
+    #[test]
+    fn excludes_warmup_from_message_count() {
+        let content = [
+            user_msg("Warmup", None),
+            assistant_msg("Ready"),
+            user_msg("Real question", None),
+            assistant_msg("Real answer"),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        // Warmup and Ready should not be counted
+        assert_eq!(
+            conv.message_count, 2,
+            "Should count 2 messages (excluding warmup)"
+        );
+    }
+
+    // === Parse error handling ===
+
+    #[test]
+    fn captures_parse_errors_with_context() {
+        let content = [
+            user_msg("Line 1", None),
+            "invalid json here".to_string(),
+            user_msg("Line 3", None),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        assert_eq!(conv.parse_errors.len(), 1);
+
+        let error = &conv.parse_errors[0];
+        assert_eq!(error.line_number, 2);
+        assert!(error.line_content.contains("invalid json"));
+        assert!(!error.error_message.is_empty());
+        // Context before should have line 1
+        assert_eq!(error.context_before.len(), 1);
+        // Context after should have line 3
+        assert_eq!(error.context_after.len(), 1);
+    }
+
+    // === Preview order ===
+
+    #[test]
+    fn show_last_reverses_preview_order() {
+        let content = [
+            user_msg("First", None),
+            assistant_msg("Response 1"),
+            user_msg("Second", None),
+            assistant_msg("Response 2"),
+            user_msg("Third", None),
+            assistant_msg("Response 3"),
+        ]
+        .join("\n");
+
+        // Parse with show_last = false
+        let conv_first = {
+            let reader = Cursor::new(&content);
+            process_conversation_reader(PathBuf::from("test.jsonl"), reader, false, None, None)
+                .unwrap()
+                .unwrap()
+        };
+
+        // Parse with show_last = true
+        let conv_last = {
+            let reader = Cursor::new(&content);
+            process_conversation_reader(PathBuf::from("test.jsonl"), reader, true, None, None)
+                .unwrap()
+                .unwrap()
+        };
+
+        // show_last=false should start with "First"
+        assert!(
+            conv_first.preview.starts_with("First"),
+            "Preview should start with First: {}",
+            conv_first.preview
+        );
+
+        // show_last=true should start with the last message (Response 3)
+        assert!(
+            conv_last.preview.starts_with("Response 3"),
+            "Preview should start with Response 3: {}",
+            conv_last.preview
+        );
+    }
+
+    // === Helper function tests ===
+
+    #[test]
+    fn is_clear_metadata_message_detects_patterns() {
+        assert!(is_clear_metadata_message(""));
+        assert!(is_clear_metadata_message("   "));
+        assert!(is_clear_metadata_message(
+            "Caveat: The messages below were generated by the user while running local commands."
+        ));
+        assert!(is_clear_metadata_message(
+            "<local-command-caveat>something</local-command-caveat>"
+        ));
+        assert!(is_clear_metadata_message(
+            "<command-name>/clear</command-name>"
+        ));
+        assert!(is_clear_metadata_message(
+            "<command-message>clear</command-message>"
+        ));
+        assert!(is_clear_metadata_message(
+            "<local-command-stdout>output</local-command-stdout>"
+        ));
+        assert!(is_clear_metadata_message(
+            "<command-args>foo</command-args>"
+        ));
+
+        // Should NOT match normal messages
+        assert!(!is_clear_metadata_message("Hello world"));
+        assert!(!is_clear_metadata_message("What is the meaning of life?"));
+    }
+
+    #[test]
+    fn normalize_whitespace_collapses_runs() {
+        assert_eq!(normalize_whitespace("hello  world"), "hello world");
+        assert_eq!(normalize_whitespace("  hello   world  "), "hello world");
+        assert_eq!(normalize_whitespace("a\n\n\nb"), "a b");
+        assert_eq!(
+            normalize_whitespace("\t\thello\t\tworld\t\t"),
+            "hello world"
+        );
+        assert_eq!(normalize_whitespace(""), "");
+    }
+
+    #[test]
+    fn is_clear_only_conversation_requires_all_three_markers() {
+        // Empty is not clear-only
+        assert!(!is_clear_only_conversation(&[]));
+
+        // Just caveat is not enough
+        assert!(!is_clear_only_conversation(&[
+            "Caveat: The messages below were generated by the user while running local commands."
+                .to_string()
+        ]));
+
+        // Caveat + command but no stdout
+        assert!(!is_clear_only_conversation(&[
+            "Caveat: The messages below were generated by the user while running local commands."
+                .to_string(),
+            "<command-name>/clear</command-name>".to_string(),
+        ]));
+
+        // All three = clear-only
+        assert!(is_clear_only_conversation(&[
+            "Caveat: The messages below were generated by the user while running local commands."
+                .to_string(),
+            "<command-name>/clear</command-name>".to_string(),
+            "<local-command-stdout></local-command-stdout>".to_string(),
+        ]));
+
+        // Any substantive message disqualifies
+        assert!(!is_clear_only_conversation(&[
+            "Caveat: The messages below were generated by the user while running local commands."
+                .to_string(),
+            "<command-name>/clear</command-name>".to_string(),
+            "<local-command-stdout></local-command-stdout>".to_string(),
+            "Hello world".to_string(),
+        ]));
+    }
+}

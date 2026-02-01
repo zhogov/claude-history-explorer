@@ -1,0 +1,90 @@
+//! Claude conversation history loading and parsing.
+//!
+//! This module provides functionality for:
+//! - Loading conversations from Claude project directories
+//! - Parsing JSONL conversation files
+//! - Encoding/decoding project directory paths
+//!
+//! # Module Structure
+//!
+//! - `loader` - Loading conversations from directories
+//! - `parser` - Parsing individual JSONL files
+//! - `path` - Path encoding/decoding utilities
+
+mod loader;
+mod parser;
+mod path;
+
+use crate::error::{AppError, Result};
+use chrono::{DateTime, Local};
+use std::path::PathBuf;
+use std::time::SystemTime;
+
+// Re-export public API
+pub use loader::{load_all_conversations_streaming, load_conversations};
+pub use path::convert_path_to_project_dir_name;
+
+/// Represents a JSONL parsing error with context for debugging
+#[derive(Clone, Debug)]
+pub struct ParseError {
+    pub line_number: usize,
+    pub line_content: String,
+    pub error_message: String,
+    /// Lines before the error (up to 2)
+    pub context_before: Vec<String>,
+    /// Lines after the error (up to 2)
+    pub context_after: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct Conversation {
+    pub path: PathBuf,
+    pub index: usize,
+    pub timestamp: DateTime<Local>,
+    pub preview: String,
+    pub full_text: String,
+    pub project_name: Option<String>,
+    pub project_path: Option<PathBuf>,
+    /// The working directory extracted from the JSONL file (the actual cwd)
+    pub cwd: Option<PathBuf>,
+    /// Number of user and assistant messages in the conversation
+    pub message_count: usize,
+    /// Parse errors encountered while processing this conversation file
+    pub parse_errors: Vec<ParseError>,
+}
+
+pub struct Project {
+    pub name: String,         // directory name (encoded)
+    pub display_name: String, // heuristic decoded path
+    pub modified: SystemTime,
+}
+
+/// Message sent from background loader to TUI
+pub enum LoaderMessage {
+    /// A fatal error occurred (e.g., projects root doesn't exist)
+    Fatal(AppError),
+    /// A non-fatal error occurred (project-level, error already logged)
+    ProjectError,
+    /// A batch of loaded conversations from one project
+    Batch(Vec<Conversation>),
+    /// Loading completed
+    Done,
+}
+
+/// Get the root Claude projects directory (~/.claude/projects)
+pub fn get_claude_projects_root() -> Result<PathBuf> {
+    let home_dir = std::env::var("HOME").map_err(|_| {
+        AppError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "HOME environment variable not set",
+        ))
+    })?;
+
+    Ok(PathBuf::from(home_dir).join(".claude").join("projects"))
+}
+
+/// Get the Claude projects directory for the current working directory
+pub fn get_claude_projects_dir(current_dir: &std::path::Path) -> Result<PathBuf> {
+    let converted = convert_path_to_project_dir_name(current_dir);
+    Ok(get_claude_projects_root()?.join(converted))
+}

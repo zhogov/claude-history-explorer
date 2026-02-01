@@ -11,6 +11,19 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 
+/// Configuration options for displaying conversations
+#[derive(Debug, Clone, Default)]
+pub struct DisplayOptions {
+    /// Hide tool calls and results
+    pub no_tools: bool,
+    /// Show thinking/reasoning blocks
+    pub show_thinking: bool,
+    /// Debug level for error logging
+    pub debug_level: Option<DebugLevel>,
+    /// Use a pager for output (less/more)
+    pub use_pager: bool,
+}
+
 const NAME_WIDTH: usize = 9;
 const SEPARATOR: &str = " │ ";
 const SEPARATOR_WIDTH: usize = 3; // Display width of " │ "
@@ -31,6 +44,185 @@ const SEPARATOR_COLOR: CustomColor = CustomColor {
     g: 80,
     b: 80,
 };
+
+/// Trait for formatting conversation output
+///
+/// Implementors handle the actual rendering of conversation elements,
+/// allowing the same processing logic to output in different formats
+/// (ledger-style with markdown, plain text, etc.)
+trait OutputFormatter {
+    /// Format and output user text content
+    fn format_user_text(&mut self, text: &str);
+
+    /// Format and output assistant text content
+    fn format_assistant_text(&mut self, text: &str);
+
+    /// Format and output a tool call
+    fn format_tool_call(&mut self, name: &str, input: &serde_json::Value);
+
+    /// Format and output a tool result
+    fn format_tool_result(&mut self, content: Option<&serde_json::Value>);
+
+    /// Format and output a thinking/reasoning block
+    fn format_thinking(&mut self, thought: &str);
+
+    /// End the current message block (add spacing)
+    fn end_message(&mut self);
+}
+
+/// Ledger-style formatter with markdown rendering and aligned columns
+struct LedgerFormatter<'a, W: Write + ?Sized> {
+    writer: &'a mut W,
+    content_width: usize,
+}
+
+impl<'a, W: Write + ?Sized> LedgerFormatter<'a, W> {
+    fn new(writer: &'a mut W, content_width: usize) -> Self {
+        Self {
+            writer,
+            content_width,
+        }
+    }
+
+    /// Print lines in ledger format with a name on the first line
+    fn print_lines<F>(&mut self, name: &str, style: F, text: &str)
+    where
+        F: Fn(&str) -> ColoredString,
+    {
+        let wrapped_lines = wrap_text(text, self.content_width);
+
+        for (i, line) in wrapped_lines.iter().enumerate() {
+            if i == 0 {
+                let padded = format!("{:>width$}", name, width = NAME_WIDTH);
+                let _ = write!(self.writer, "{}", style(&padded));
+            } else {
+                let _ = write!(self.writer, "{:>width$}", "", width = NAME_WIDTH);
+            }
+            let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+            let _ = writeln!(self.writer, "{}", line);
+        }
+    }
+
+    /// Print continuation lines with dimmed content
+    fn print_continuation(&mut self, text: &str) {
+        for line in wrap_text(text, self.content_width) {
+            let _ = write!(self.writer, "{:>width$}", "", width = NAME_WIDTH);
+            let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+            let _ = writeln!(self.writer, "{}", line.dimmed());
+        }
+    }
+
+    /// Print pre-formatted markdown text with ledger layout
+    fn print_markdown<F>(&mut self, name: &str, style: F, text: &str)
+    where
+        F: Fn(&str) -> ColoredString,
+    {
+        let lines: Vec<&str> = text.lines().collect();
+
+        if lines.is_empty() {
+            let padded = format!("{:>width$}", name, width = NAME_WIDTH);
+            let _ = write!(self.writer, "{}", style(&padded));
+            let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+            let _ = writeln!(self.writer);
+            return;
+        }
+
+        for (i, line) in lines.iter().enumerate() {
+            if i == 0 {
+                let padded = format!("{:>width$}", name, width = NAME_WIDTH);
+                let _ = write!(self.writer, "{}", style(&padded));
+            } else {
+                let _ = write!(self.writer, "{:>width$}", "", width = NAME_WIDTH);
+            }
+            let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+            let _ = writeln!(self.writer, "{}", line);
+        }
+    }
+}
+
+impl<W: Write + ?Sized> OutputFormatter for LedgerFormatter<'_, W> {
+    fn format_user_text(&mut self, text: &str) {
+        let rendered = render_markdown(text, self.content_width);
+        self.print_markdown("You", |s| s.white().bold(), &rendered);
+    }
+
+    fn format_assistant_text(&mut self, text: &str) {
+        let rendered = render_markdown(text, self.content_width);
+        self.print_markdown("Claude", |s| s.custom_color(TEAL).bold(), &rendered);
+    }
+
+    fn format_tool_call(&mut self, name: &str, input: &serde_json::Value) {
+        let tool_header = format!("<Calling: {}>", name);
+        self.print_lines("Claude", |s| s.custom_color(DIM_TEAL), &tool_header);
+        if let Ok(formatted_input) = serde_json::to_string_pretty(input) {
+            self.print_continuation(&formatted_input);
+        }
+    }
+
+    fn format_tool_result(&mut self, content: Option<&serde_json::Value>) {
+        self.print_lines("Tool", |s| s.custom_color(DIM_TEAL), "<Result>");
+        let content_str = format_tool_content(content);
+        self.print_continuation(&content_str);
+    }
+
+    fn format_thinking(&mut self, thought: &str) {
+        self.print_lines("Thinking", |s| s.custom_color(DIM_TEAL), thought);
+    }
+
+    fn end_message(&mut self) {
+        let _ = writeln!(self.writer);
+    }
+}
+
+/// Plain text formatter without formatting or alignment
+struct PlainFormatter;
+
+impl OutputFormatter for PlainFormatter {
+    fn format_user_text(&mut self, text: &str) {
+        println!("You: {}", text);
+    }
+
+    fn format_assistant_text(&mut self, text: &str) {
+        println!("Claude: {}", text);
+    }
+
+    fn format_tool_call(&mut self, name: &str, input: &serde_json::Value) {
+        println!("Claude: <Calling: {}>", name);
+        if let Ok(formatted_input) = serde_json::to_string_pretty(input) {
+            println!("{}", formatted_input);
+        }
+    }
+
+    fn format_tool_result(&mut self, content: Option<&serde_json::Value>) {
+        println!("Tool: <Result>");
+        let content_str = format_tool_content(content);
+        println!("{}", content_str);
+    }
+
+    fn format_thinking(&mut self, thought: &str) {
+        println!("Thinking: {}", thought);
+    }
+
+    fn end_message(&mut self) {
+        println!();
+    }
+}
+
+/// Format tool result content to a string
+fn format_tool_content(content: Option<&serde_json::Value>) -> String {
+    match content {
+        Some(value) => {
+            if let Some(s) = value.as_str() {
+                s.to_string()
+            } else if let Ok(formatted) = serde_json::to_string_pretty(value) {
+                formatted
+            } else {
+                "<invalid content>".to_string()
+            }
+        }
+        None => "<no content>".to_string(),
+    }
+}
 
 /// Process user message text to handle command-related XML tags
 /// Returns None if the message should be skipped entirely (e.g., empty local-command-stdout)
@@ -81,81 +273,15 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
         .collect()
 }
 
-/// Print lines in ledger format with a name on the first line and blank name column for continuations
-fn print_ledger_lines<W, F>(writer: &mut W, name: &str, style: F, text: &str, content_width: usize)
-where
-    W: Write + ?Sized,
-    F: Fn(&str) -> ColoredString,
-{
-    let wrapped_lines = wrap_text(text, content_width);
-
-    for (i, line) in wrapped_lines.iter().enumerate() {
-        if i == 0 {
-            // Pad the plain text first, then apply color to avoid ANSI escape code interference
-            let padded = format!("{:>width$}", name, width = NAME_WIDTH);
-            let _ = write!(writer, "{}", style(&padded));
-        } else {
-            let _ = write!(writer, "{:>width$}", "", width = NAME_WIDTH);
-        }
-        let _ = write!(writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
-        let _ = writeln!(writer, "{}", line);
-    }
-}
-
-/// Print continuation lines (for tool output, etc.) with dimmed content
-fn print_ledger_continuation<W: Write + ?Sized>(writer: &mut W, text: &str, content_width: usize) {
-    for line in wrap_text(text, content_width) {
-        let _ = write!(writer, "{:>width$}", "", width = NAME_WIDTH);
-        let _ = write!(writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
-        let _ = writeln!(writer, "{}", line.dimmed());
-    }
-}
-
-/// Print pre-formatted markdown text with ledger layout
-/// The text already contains ANSI codes and newlines from the markdown renderer
-fn print_ledger_markdown<W, F>(writer: &mut W, name: &str, style: F, text: &str)
-where
-    W: Write + ?Sized,
-    F: Fn(&str) -> ColoredString,
-{
-    let lines: Vec<&str> = text.lines().collect();
-
-    if lines.is_empty() {
-        // Handle empty text - still print the name
-        let padded = format!("{:>width$}", name, width = NAME_WIDTH);
-        let _ = write!(writer, "{}", style(&padded));
-        let _ = write!(writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
-        let _ = writeln!(writer);
-        return;
-    }
-
-    for (i, line) in lines.iter().enumerate() {
-        if i == 0 {
-            let padded = format!("{:>width$}", name, width = NAME_WIDTH);
-            let _ = write!(writer, "{}", style(&padded));
-        } else {
-            let _ = write!(writer, "{:>width$}", "", width = NAME_WIDTH);
-        }
-        let _ = write!(writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
-        let _ = writeln!(writer, "{}", line);
-    }
-}
-
 /// Display a conversation from a file
-pub fn display_conversation(
-    file_path: &Path,
-    no_tools: bool,
-    show_thinking: bool,
-    debug_level: Option<DebugLevel>,
-    use_pager: bool,
-) -> Result<()> {
+pub fn display_conversation(file_path: &Path, options: &DisplayOptions) -> Result<()> {
     let file = File::open(file_path)?;
     let reader = BufReader::new(file);
     let terminal_width = get_terminal_width();
     let content_width = terminal_width.saturating_sub(NAME_WIDTH + SEPARATOR_WIDTH);
 
     // Spawn pager if requested
-    let mut pager_child = if use_pager {
+    let mut pager_child = if options.use_pager {
         pager::spawn_pager().ok()
     } else {
         None
@@ -169,6 +295,8 @@ pub fn display_conversation(
         &mut stdout_handle
     };
 
+    let mut formatter = LedgerFormatter::new(writer, content_width);
+
     for (line_number, line_result) in reader.lines().enumerate() {
         let line = line_result?;
         if line.trim().is_empty() {
@@ -177,14 +305,19 @@ pub fn display_conversation(
 
         match serde_json::from_str::<LogEntry>(&line) {
             Ok(entry) => {
-                display_entry(writer, &entry, no_tools, show_thinking, content_width);
+                process_entry(
+                    &mut formatter,
+                    &entry,
+                    options.no_tools,
+                    options.show_thinking,
+                );
             }
             Err(e) => {
                 debug::error(
-                    debug_level,
+                    options.debug_level,
                     &format!("Failed to parse line {}: {}", line_number + 1, e),
                 );
-                if debug_level.is_some() {
+                if options.debug_level.is_some() {
                     let _ = debug_log::log_display_error(
                         file_path,
                         line_number + 1,
@@ -205,12 +338,53 @@ pub fn display_conversation(
     Ok(())
 }
 
-fn display_entry<W: Write + ?Sized>(
-    writer: &mut W,
+/// Display a conversation in plain text format (no ledger formatting)
+pub fn display_conversation_plain(file_path: &Path, options: &DisplayOptions) -> Result<()> {
+    let file = File::open(file_path)?;
+    let reader = BufReader::new(file);
+    let mut formatter = PlainFormatter;
+
+    for (line_number, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<LogEntry>(&line) {
+            Ok(entry) => {
+                process_entry(
+                    &mut formatter,
+                    &entry,
+                    options.no_tools,
+                    options.show_thinking,
+                );
+            }
+            Err(e) => {
+                debug::error(
+                    options.debug_level,
+                    &format!("Failed to parse line {}: {}", line_number + 1, e),
+                );
+                if options.debug_level.is_some() {
+                    let _ = debug_log::log_display_error(
+                        file_path,
+                        line_number + 1,
+                        &e.to_string(),
+                        &line,
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Process a log entry using the provided formatter
+fn process_entry<F: OutputFormatter>(
+    formatter: &mut F,
     entry: &LogEntry,
     no_tools: bool,
     show_thinking: bool,
-    content_width: usize,
 ) {
     match entry {
         LogEntry::Summary { .. }
@@ -219,71 +393,50 @@ fn display_entry<W: Write + ?Sized>(
         | LogEntry::Progress { .. } => {
             // Skip metadata entries
         }
-        LogEntry::User { message, .. } => match &message.content {
-            UserContent::String(text) => {
-                if let Some(processed) = process_command_message(text) {
-                    let rendered = render_markdown(&processed, content_width);
-                    print_ledger_markdown(writer, "You", |s| s.white().bold(), &rendered);
-                    let _ = writeln!(writer);
-                }
-            }
-            UserContent::Blocks(blocks) => {
-                let mut printed_content = false;
-                for block in blocks {
-                    match block {
-                        ContentBlock::Text { text } => {
-                            if let Some(processed) = process_command_message(text) {
-                                let rendered = render_markdown(&processed, content_width);
-                                print_ledger_markdown(
-                                    writer,
-                                    "You",
-                                    |s| s.white().bold(),
-                                    &rendered,
-                                );
-                                printed_content = true;
-                            }
-                        }
-                        ContentBlock::ToolResult { content, .. } => {
-                            if !no_tools {
-                                print_ledger_lines(
-                                    writer,
-                                    "Tool",
-                                    |s| s.custom_color(DIM_TEAL),
-                                    "<Result>",
-                                    content_width,
-                                );
-                                if let Some(content_value) = content {
-                                    let content_str =
-                                        if let Some(result_str) = content_value.as_str() {
-                                            result_str.to_string()
-                                        } else if let Ok(formatted_result) =
-                                            serde_json::to_string_pretty(content_value)
-                                        {
-                                            formatted_result
-                                        } else {
-                                            "<invalid content>".to_string()
-                                        };
-                                    print_ledger_continuation(writer, &content_str, content_width);
-                                } else {
-                                    print_ledger_continuation(
-                                        writer,
-                                        "<no content>",
-                                        content_width,
-                                    );
-                                }
-                                printed_content = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if printed_content {
-                    let _ = writeln!(writer);
-                }
-            }
-        },
+        LogEntry::User { message, .. } => {
+            process_user_message(formatter, message, no_tools);
+        }
         LogEntry::Assistant { message, .. } => {
-            display_assistant_message(writer, message, no_tools, show_thinking, content_width);
+            process_assistant_message(formatter, message, no_tools, show_thinking);
+        }
+    }
+}
+
+/// Process a user message using the provided formatter
+fn process_user_message<F: OutputFormatter>(
+    formatter: &mut F,
+    message: &crate::claude::UserMessage,
+    no_tools: bool,
+) {
+    match &message.content {
+        UserContent::String(text) => {
+            if let Some(processed) = process_command_message(text) {
+                formatter.format_user_text(&processed);
+                formatter.end_message();
+            }
+        }
+        UserContent::Blocks(blocks) => {
+            let mut printed_content = false;
+            for block in blocks {
+                match block {
+                    ContentBlock::Text { text } => {
+                        if let Some(processed) = process_command_message(text) {
+                            formatter.format_user_text(&processed);
+                            printed_content = true;
+                        }
+                    }
+                    ContentBlock::ToolResult { content, .. } => {
+                        if !no_tools {
+                            formatter.format_tool_result(content.as_ref());
+                            printed_content = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if printed_content {
+                formatter.end_message();
+            }
         }
     }
 }
@@ -320,162 +473,9 @@ impl<'a> From<&'a AssistantMessage> for FormattedMessage<'a> {
     }
 }
 
-fn display_assistant_message<W: Write + ?Sized>(
-    writer: &mut W,
-    message: &AssistantMessage,
-    no_tools: bool,
-    show_thinking: bool,
-    content_width: usize,
-) {
-    let formatted = FormattedMessage::from(message);
-    let mut printed_content = false;
-
-    // Print text blocks with markdown rendering
-    for text in formatted.text_blocks {
-        let rendered = render_markdown(text, content_width);
-        print_ledger_markdown(writer, "Claude", |s| s.custom_color(TEAL).bold(), &rendered);
-        printed_content = true;
-    }
-
-    // Print tool calls
-    if !no_tools {
-        for (tool_name, tool_input) in formatted.tool_calls {
-            let tool_header = format!("<Calling: {}>", tool_name);
-            print_ledger_lines(
-                writer,
-                "Claude",
-                |s| s.custom_color(DIM_TEAL),
-                &tool_header,
-                content_width,
-            );
-            if let Ok(formatted_input) = serde_json::to_string_pretty(tool_input) {
-                print_ledger_continuation(writer, &formatted_input, content_width);
-            }
-            printed_content = true;
-        }
-    }
-
-    // Print thinking blocks
-    if show_thinking {
-        for thought in formatted.thinking_steps {
-            print_ledger_lines(
-                writer,
-                "Thinking",
-                |s| s.custom_color(DIM_TEAL),
-                thought,
-                content_width,
-            );
-            printed_content = true;
-        }
-    }
-
-    // Only add blank line separator if we printed something
-    if printed_content {
-        let _ = writeln!(writer);
-    }
-}
-
-/// Display a conversation in plain text format (no ledger formatting)
-pub fn display_conversation_plain(
-    file_path: &Path,
-    no_tools: bool,
-    show_thinking: bool,
-    debug_level: Option<DebugLevel>,
-) -> Result<()> {
-    let file = File::open(file_path)?;
-    let reader = BufReader::new(file);
-
-    for (line_number, line_result) in reader.lines().enumerate() {
-        let line = line_result?;
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        match serde_json::from_str::<LogEntry>(&line) {
-            Ok(entry) => {
-                display_entry_plain(&entry, no_tools, show_thinking);
-            }
-            Err(e) => {
-                debug::error(
-                    debug_level,
-                    &format!("Failed to parse line {}: {}", line_number + 1, e),
-                );
-                if debug_level.is_some() {
-                    let _ = debug_log::log_display_error(
-                        file_path,
-                        line_number + 1,
-                        &e.to_string(),
-                        &line,
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn display_entry_plain(entry: &LogEntry, no_tools: bool, show_thinking: bool) {
-    match entry {
-        LogEntry::Summary { .. }
-        | LogEntry::FileHistorySnapshot { .. }
-        | LogEntry::System { .. }
-        | LogEntry::Progress { .. } => {
-            // Skip metadata entries
-        }
-        LogEntry::User { message, .. } => match &message.content {
-            UserContent::String(text) => {
-                if let Some(processed) = process_command_message(text) {
-                    println!("You: {}", processed);
-                    println!();
-                }
-            }
-            UserContent::Blocks(blocks) => {
-                let mut printed_content = false;
-                for block in blocks {
-                    match block {
-                        ContentBlock::Text { text } => {
-                            if let Some(processed) = process_command_message(text) {
-                                println!("You: {}", processed);
-                                printed_content = true;
-                            }
-                        }
-                        ContentBlock::ToolResult { content, .. } => {
-                            if !no_tools {
-                                println!("Tool: <Result>");
-                                if let Some(content_value) = content {
-                                    let content_str =
-                                        if let Some(result_str) = content_value.as_str() {
-                                            result_str.to_string()
-                                        } else if let Ok(formatted_result) =
-                                            serde_json::to_string_pretty(content_value)
-                                        {
-                                            formatted_result
-                                        } else {
-                                            "<invalid content>".to_string()
-                                        };
-                                    println!("{}", content_str);
-                                } else {
-                                    println!("<no content>");
-                                }
-                                printed_content = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if printed_content {
-                    println!();
-                }
-            }
-        },
-        LogEntry::Assistant { message, .. } => {
-            display_assistant_message_plain(message, no_tools, show_thinking);
-        }
-    }
-}
-
-fn display_assistant_message_plain(
+/// Process an assistant message using the provided formatter
+fn process_assistant_message<F: OutputFormatter>(
+    formatter: &mut F,
     message: &AssistantMessage,
     no_tools: bool,
     show_thinking: bool,
@@ -485,17 +485,14 @@ fn display_assistant_message_plain(
 
     // Print text blocks
     for text in formatted.text_blocks {
-        println!("Claude: {}", text);
+        formatter.format_assistant_text(text);
         printed_content = true;
     }
 
     // Print tool calls
     if !no_tools {
         for (tool_name, tool_input) in formatted.tool_calls {
-            println!("Claude: <Calling: {}>", tool_name);
-            if let Ok(formatted_input) = serde_json::to_string_pretty(tool_input) {
-                println!("{}", formatted_input);
-            }
+            formatter.format_tool_call(tool_name, tool_input);
             printed_content = true;
         }
     }
@@ -503,12 +500,13 @@ fn display_assistant_message_plain(
     // Print thinking blocks
     if show_thinking {
         for thought in formatted.thinking_steps {
-            println!("Thinking: {}", thought);
+            formatter.format_thinking(thought);
             printed_content = true;
         }
     }
 
+    // Only add spacing if we printed something
     if printed_content {
-        println!();
+        formatter.end_message();
     }
 }

@@ -178,22 +178,18 @@ fn run() -> Result<()> {
         }
     }
 
-    // Display the selected conversation (pass the negative form for no_tools)
+    // Display the selected conversation
+    let display_options = display::DisplayOptions {
+        no_tools: !show_tools,
+        show_thinking,
+        debug_level: args.debug,
+        use_pager,
+    };
+
     if plain_mode {
-        display::display_conversation_plain(
-            &selected_path,
-            !show_tools,
-            show_thinking,
-            args.debug,
-        )?;
+        display::display_conversation_plain(&selected_path, &display_options)?;
     } else {
-        display::display_conversation(
-            &selected_path,
-            !show_tools,
-            show_thinking,
-            args.debug,
-            use_pager,
-        )?;
+        display::display_conversation(&selected_path, &display_options)?;
     }
 
     Ok(())
