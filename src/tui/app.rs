@@ -1,3 +1,4 @@
+use crate::debug_log;
 use crate::error::{AppError, Result};
 use crate::history::Conversation;
 use crate::tui::search::{self, SearchableConversation};
@@ -243,6 +244,9 @@ pub fn run(conversations: Vec<Conversation>, use_relative_time: bool) -> Result<
             if key.kind == KeyEventKind::Press
                 && let Some(action) = app.handle_key(key.code, key.modifiers)
             {
+                if let Action::Select(ref path) = action {
+                    let _ = debug_log::log_selected_path(path);
+                }
                 return Ok(action);
             }
         }
