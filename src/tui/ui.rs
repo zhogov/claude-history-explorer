@@ -83,7 +83,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             // Selection indicator: vertical bar for all rows
             let indicator = "▌ ";
             let indicator_style = if is_selected {
-                Style::default().fg(Color::Yellow)
+                Style::default().fg(Color::Rgb(78, 201, 176))
             } else {
                 Style::default().fg(Color::Rgb(60, 60, 60))
             };
