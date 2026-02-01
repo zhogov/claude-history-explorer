@@ -41,8 +41,7 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_list(frame: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
-    let query = app.query().trim();
-    let query_lower = query.to_lowercase();
+    let query_lower = app.query().trim().to_lowercase();
 
     // Calculate visible range FIRST (before building any items)
     let items_per_page = (area.height as usize) / LINES_PER_ITEM;
@@ -118,7 +117,6 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             let mut header_spans = vec![Span::styled(indicator.to_string(), indicator_style)];
             header_spans.extend(highlight_text(
                 &project_part,
-                query,
                 &query_lower,
                 project_style,
                 highlight_style,
@@ -149,7 +147,6 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             let mut preview_spans = vec![Span::styled(indicator.to_string(), indicator_style)];
             preview_spans.extend(highlight_text(
                 &truncated_preview,
-                query,
                 &query_lower,
                 preview_style,
                 highlight_style,
@@ -216,33 +213,60 @@ fn sanitize_preview(text: &str) -> String {
 /// Split text into spans with matched portions highlighted (case-insensitive)
 fn highlight_text(
     text: &str,
-    query: &str,
     query_lower: &str,
     base_style: Style,
     highlight_style: Style,
 ) -> Vec<Span<'static>> {
-    if query.is_empty() {
+    if query_lower.is_empty() {
         return vec![Span::styled(text.to_string(), base_style)];
     }
 
     let text_lower = text.to_lowercase();
-    let mut spans = Vec::new();
-    let mut last_end = 0;
+    let query_char_len = query_lower.chars().count();
 
-    for (start, _) in text_lower.match_indices(query_lower) {
-        // Add non-matching text before this match
-        if start > last_end {
-            spans.push(Span::styled(text[last_end..start].to_string(), base_style));
+    // Build a mapping from char index to byte index for the original text
+    let char_to_byte: Vec<usize> = text
+        .char_indices()
+        .map(|(byte_idx, _)| byte_idx)
+        .chain(std::iter::once(text.len()))
+        .collect();
+
+    // Find matches by character position in lowercased text
+    let mut spans = Vec::new();
+    let mut last_char_end = 0;
+
+    let lower_chars: Vec<char> = text_lower.chars().collect();
+    let query_chars: Vec<char> = query_lower.chars().collect();
+
+    let mut char_idx = 0;
+    while char_idx + query_chars.len() <= lower_chars.len() {
+        if lower_chars[char_idx..char_idx + query_chars.len()] == query_chars[..] {
+            // Found a match at char_idx
+            if char_idx > last_char_end {
+                let start_byte = char_to_byte[last_char_end];
+                let end_byte = char_to_byte[char_idx];
+                spans.push(Span::styled(
+                    text[start_byte..end_byte].to_string(),
+                    base_style,
+                ));
+            }
+            let match_start_byte = char_to_byte[char_idx];
+            let match_end_byte = char_to_byte[char_idx + query_char_len];
+            spans.push(Span::styled(
+                text[match_start_byte..match_end_byte].to_string(),
+                highlight_style,
+            ));
+            last_char_end = char_idx + query_char_len;
+            char_idx = last_char_end;
+        } else {
+            char_idx += 1;
         }
-        // Add the matched text with highlight
-        let end = start + query_lower.len();
-        spans.push(Span::styled(text[start..end].to_string(), highlight_style));
-        last_end = end;
     }
 
-    // Add remaining non-matching text
-    if last_end < text.len() {
-        spans.push(Span::styled(text[last_end..].to_string(), base_style));
+    // Add remaining text
+    if last_char_end < char_to_byte.len() - 1 {
+        let start_byte = char_to_byte[last_char_end];
+        spans.push(Span::styled(text[start_byte..].to_string(), base_style));
     }
 
     if spans.is_empty() {
