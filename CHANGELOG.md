@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.15 (2026-02-01)
+
+- Added ability to delete conversations from the TUI (press `Ctrl+D`, confirm
+  with `y`)
+- Added cursor navigation in the search field with arrow keys
+
 ## v0.1.14 (2026-02-01)
 
 - Added markdown rendering for conversation output with support for headings,
