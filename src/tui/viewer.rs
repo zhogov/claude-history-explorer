@@ -178,6 +178,7 @@ struct TuiMarkdownRenderer {
     list_stack: Vec<ListContext>,
     in_code_block: bool,
     code_block_content: String,
+    in_list_item_start: bool, // Suppress paragraph blank line right after list bullet
 }
 
 #[derive(Clone)]
@@ -207,6 +208,7 @@ impl TuiMarkdownRenderer {
             list_stack: Vec::new(),
             in_code_block: false,
             code_block_content: String::new(),
+            in_list_item_start: false,
         }
     }
 
@@ -226,10 +228,13 @@ impl TuiMarkdownRenderer {
     fn start_tag(&mut self, tag: Tag) {
         match tag {
             Tag::Paragraph => {
-                // Add blank line before paragraph if we have content
-                if !self.lines.is_empty() || !self.current_line.is_empty() {
+                // Don't add blank line if we just started a list item (bullet is on same line)
+                if !self.in_list_item_start
+                    && (!self.lines.is_empty() || !self.current_line.is_empty())
+                {
                     self.ensure_blank_line();
                 }
+                self.in_list_item_start = false;
             }
             Tag::Heading { level, .. } => {
                 self.ensure_blank_line();
@@ -309,6 +314,7 @@ impl TuiMarkdownRenderer {
                     self.push_styled_text(&text, style);
                 }
                 let _ = indent; // Mark as intentionally unused
+                self.in_list_item_start = true; // Next paragraph shouldn't add blank line
             }
             Tag::Emphasis => self.style_stack.push(MarkdownStyle::Italic),
             Tag::Strong => self.style_stack.push(MarkdownStyle::Bold),
@@ -366,9 +372,11 @@ impl TuiMarkdownRenderer {
             }
             TagEnd::List(_) => {
                 self.list_stack.pop();
+                self.in_list_item_start = false; // Clear flag when list ends
             }
             TagEnd::Item => {
                 self.flush_line();
+                self.in_list_item_start = false; // Clear flag when item ends
             }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                 self.style_stack.pop();
