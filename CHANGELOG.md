@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1.18 (2026-02-02)
+
+- Added in-TUI conversation viewer. Press Enter to view conversations without
+  leaving the TUI, with Vim-style navigation (j/k, d/u, g/G) and search (/)
+- Added export and yank menus to the viewer. Press `e` to export to file or `y`
+  to copy to clipboard in multiple formats (ledger, plain text, markdown, JSONL)
+- Added `Y` hotkey to copy the conversation file path to clipboard
+- Added `resume.default_args` config option to pass custom arguments when
+  resuming conversations with `Ctrl+R`
+- Improved markdown rendering: fixed spacing after numbered lists, styled
+  headings with subtle color
+- Fixed thinking blocks to render with italic and dimmed style
+- Fixed user messages showing in wrong color in the viewer
+- Improved search performance
+
 ## v0.1.17 (2026-02-01)
 
 - Added `Ctrl+R` keybinding to resume the selected conversation directly from
