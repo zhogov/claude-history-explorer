@@ -252,8 +252,7 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
             let preview = Line::from(preview_spans).style(selection_bg);
 
             // Check for hidden matches and build context line if needed
-            // Only compute for selected row to avoid expensive full-text scanning
-            let context_line = if !query_words.is_empty() && is_selected {
+            let context_line = if !query_words.is_empty() {
                 if let Some((match_pos, match_char_len)) =
                     find_hidden_match(&conv.full_text, &truncated_preview, &query_words)
                 {
