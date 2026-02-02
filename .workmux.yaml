@@ -4,3 +4,4 @@ pre_merge:
 files:
   symlink:
     - history
+    - .ignore
