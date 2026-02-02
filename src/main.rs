@@ -57,6 +57,10 @@ fn run() -> Result<()> {
     // Merge CLI arguments with config file settings. CLI takes precedence.
     let display_config = config.display.unwrap_or_default();
 
+    // Extract resume config
+    let resume_config = config.resume.unwrap_or_default();
+    let default_args = resume_config.default_args.as_deref().unwrap_or(&[]);
+
     // Use positive names internally for clarity
     let show_tools = resolve_bool_setting(
         args.show_tools,
@@ -95,7 +99,7 @@ fn run() -> Result<()> {
             (tui::Action::Resume(path), convs) => {
                 let conv = convs.iter().find(|c| c.path == path);
                 let project_path = conv.and_then(|c| c.project_path.as_ref());
-                resume_with_claude(&path, project_path)?;
+                resume_with_claude(&path, project_path, default_args)?;
                 return Ok(());
             }
             (tui::Action::Quit, _) => return Err(AppError::SelectionCancelled),
@@ -135,7 +139,7 @@ fn run() -> Result<()> {
             tui::Action::Resume(path) => {
                 let conv = conversations.iter().find(|c| c.path == path);
                 let project_path = conv.and_then(|c| c.project_path.as_ref());
-                resume_with_claude(&path, project_path)?;
+                resume_with_claude(&path, project_path, default_args)?;
                 return Ok(());
             }
             tui::Action::Quit => return Err(AppError::SelectionCancelled),
@@ -166,7 +170,7 @@ fn run() -> Result<()> {
             }
         }
         let project_path = conv.and_then(|c| c.project_path.as_ref());
-        resume_with_claude(&selected_path, project_path)?;
+        resume_with_claude(&selected_path, project_path, default_args)?;
         return Ok(());
     }
 
@@ -207,7 +211,11 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn resume_with_claude(selected_path: &Path, project_path: Option<&PathBuf>) -> Result<()> {
+fn resume_with_claude(
+    selected_path: &Path,
+    project_path: Option<&PathBuf>,
+    default_args: &[String],
+) -> Result<()> {
     let conversation_id = selected_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -234,6 +242,7 @@ fn resume_with_claude(selected_path: &Path, project_path: Option<&PathBuf>) -> R
 
     let mut command = Command::new("claude");
     command.args(["--resume", &conversation_id]);
+    command.args(default_args);
     command.current_dir(project_dir);
 
     run_claude_command(command)
