@@ -6,7 +6,7 @@
 
 use crate::claude::{AssistantMessage, ContentBlock, LogEntry, UserContent};
 use crate::tui::app::{LineStyle, RenderedLine};
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -16,7 +16,6 @@ const WHITE: (u8, u8, u8) = (255, 255, 255);
 const TEAL: (u8, u8, u8) = (78, 201, 176);
 const DIM_TEAL: (u8, u8, u8) = (60, 160, 140);
 const SEPARATOR_COLOR: (u8, u8, u8) = (80, 80, 80);
-const CYAN: (u8, u8, u8) = (0, 255, 255);
 const CODE_COLOR: (u8, u8, u8) = (147, 161, 199);
 const GREEN: (u8, u8, u8) = (0, 255, 0);
 const BLUE: (u8, u8, u8) = (100, 149, 237);
@@ -236,18 +235,8 @@ impl TuiMarkdownRenderer {
                 }
                 self.in_list_item_start = false;
             }
-            Tag::Heading { level, .. } => {
+            Tag::Heading { .. } => {
                 self.ensure_blank_line();
-                let depth = heading_level_to_usize(level);
-                let prefix = format!("{} ", "#".repeat(depth));
-                self.push_styled_text(
-                    &prefix,
-                    LineStyle {
-                        fg: Some(CYAN),
-                        bold: true,
-                        ..Default::default()
-                    },
-                );
                 self.style_stack.push(MarkdownStyle::Heading);
             }
             Tag::CodeBlock(kind) => {
@@ -486,7 +475,6 @@ impl TuiMarkdownRenderer {
                 MarkdownStyle::Quote => style.fg = Some(GREEN),
                 MarkdownStyle::Link => style.fg = Some(BLUE),
                 MarkdownStyle::Heading => {
-                    style.fg = Some(CYAN);
                     style.bold = true;
                 }
             }
@@ -502,17 +490,6 @@ impl TuiMarkdownRenderer {
             self.lines.pop();
         }
         self.lines
-    }
-}
-
-fn heading_level_to_usize(level: HeadingLevel) -> usize {
-    match level {
-        HeadingLevel::H1 => 1,
-        HeadingLevel::H2 => 2,
-        HeadingLevel::H3 => 3,
-        HeadingLevel::H4 => 4,
-        HeadingLevel::H5 => 5,
-        HeadingLevel::H6 => 6,
     }
 }
 
@@ -734,7 +711,7 @@ mod tests {
     #[test]
     fn test_heading() {
         let result = render_to_text("# Heading 1", 80);
-        assert!(result.contains("# Heading 1"));
+        assert!(result.contains("Heading 1"));
     }
 
     #[test]
@@ -743,7 +720,7 @@ mod tests {
         let lines: Vec<&str> = result.lines().collect();
         // Should have: heading, blank, text
         assert_eq!(lines.len(), 3, "Expected 3 lines, got:\n{}", result);
-        assert!(lines[0].contains("# Heading"));
+        assert!(lines[0].contains("Heading"));
         assert_eq!(lines[1], "");
         assert_eq!(lines[2], "Some text");
     }
