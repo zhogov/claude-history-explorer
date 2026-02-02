@@ -6,7 +6,7 @@ use chrono::{DateTime, Local};
 use chrono_humanize::{Accuracy, HumanTime, Tense};
 use ratatui::layout::Position;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 
 /// Lines per conversation item (header + preview + separator)
 const LINES_PER_ITEM: usize = 3;
@@ -429,9 +429,12 @@ fn render_export_menu(frame: &mut Frame, selected: usize, is_yank: bool) {
         height: menu_height,
     };
 
+    // Clear the area behind the modal first
+    frame.render_widget(Clear, menu_area);
+
     // Render background
-    let clear = Block::default().style(Style::default().bg(Color::Rgb(25, 25, 30)));
-    frame.render_widget(clear, menu_area);
+    let background = Block::default().style(Style::default().bg(Color::Rgb(25, 25, 30)));
+    frame.render_widget(background, menu_area);
 
     // Render border
     let block = Block::default()
