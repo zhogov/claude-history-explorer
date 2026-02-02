@@ -232,11 +232,7 @@ impl TuiMarkdownRenderer {
                 }
             }
             Tag::Heading { level, .. } => {
-                if !self.lines.is_empty() {
-                    self.ensure_blank_line();
-                } else {
-                    self.flush_line();
-                }
+                self.ensure_blank_line();
                 let depth = heading_level_to_usize(level);
                 let prefix = format!("{} ", "#".repeat(depth));
                 self.push_styled_text(
@@ -250,11 +246,7 @@ impl TuiMarkdownRenderer {
                 self.style_stack.push(MarkdownStyle::Heading);
             }
             Tag::CodeBlock(kind) => {
-                if !self.lines.is_empty() {
-                    self.ensure_blank_line();
-                } else {
-                    self.flush_line();
-                }
+                self.ensure_blank_line();
                 self.in_code_block = true;
                 self.code_block_content.clear();
                 let lang = match kind {
@@ -277,7 +269,7 @@ impl TuiMarkdownRenderer {
             }
             Tag::List(start) => {
                 // Add blank line before top-level lists only
-                if !self.lines.is_empty() && self.list_stack.is_empty() {
+                if self.list_stack.is_empty() {
                     self.ensure_blank_line();
                 } else {
                     self.flush_line();
@@ -322,7 +314,7 @@ impl TuiMarkdownRenderer {
             Tag::Strong => self.style_stack.push(MarkdownStyle::Bold),
             Tag::Strikethrough => self.style_stack.push(MarkdownStyle::Strikethrough),
             Tag::BlockQuote(_) => {
-                self.flush_line();
+                self.ensure_blank_line();
                 self.push_styled_text(
                     "> ",
                     LineStyle {
@@ -435,7 +427,7 @@ impl TuiMarkdownRenderer {
     }
 
     fn rule(&mut self) {
-        self.flush_line();
+        self.ensure_blank_line();
         let rule = "─".repeat(self.max_width.min(40));
         self.push_styled_text(
             &rule,
