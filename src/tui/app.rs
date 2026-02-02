@@ -473,12 +473,13 @@ impl App {
             KeyCode::Esc => {
                 // If search is active, clear it first before exiting view
                 if let AppMode::View(ref mut state) = self.app_mode
-                    && state.search_mode == ViewSearchMode::Active {
-                        state.search_mode = ViewSearchMode::Off;
-                        state.search_matches.clear();
-                        state.search_query.clear();
-                        return None;
-                    }
+                    && state.search_mode == ViewSearchMode::Active
+                {
+                    state.search_mode = ViewSearchMode::Off;
+                    state.search_matches.clear();
+                    state.search_query.clear();
+                    return None;
+                }
                 self.app_mode = AppMode::List;
                 None
             }
