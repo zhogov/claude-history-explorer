@@ -272,10 +272,16 @@ plain = false
 
 # Use pager for output (default: true when stdout is a terminal)
 pager = true
+
+[resume]
+# Default arguments to pass to claude command when resuming
+# Example: default_args = ["--dangerously-skip-permissions"]
 EOF
 ```
 
 ### Available options
+
+#### Display options
 
 - `no_tools` (boolean): When false, shows tool calls; when true, hides them
   (default: false means tools are hidden)
@@ -289,6 +295,13 @@ EOF
   false)
 - `pager` (boolean): Pipe output through a pager for scrolling (default: true
   when stdout is a terminal)
+
+#### Resume options
+
+- `default_args` (array of strings): Arguments to pass to the `claude` command
+  when resuming conversations. Useful for flags like
+  `--dangerously-skip-permissions` that you want applied every time you resume.
+  Example: `default_args = ["--dangerously-skip-permissions", "--verbose"]`
 
 ### Overriding config
 
