@@ -114,6 +114,16 @@ impl<'a, W: Write + ?Sized> LedgerFormatter<'a, W> {
         }
     }
 
+    /// Print pre-formatted markdown text as continuation lines (no dimming)
+    fn print_markdown_continuation(&mut self, text: &str) {
+        let rendered = render_markdown(text, self.content_width);
+        for line in rendered.lines() {
+            let _ = write!(self.writer, "{:>width$}", "", width = NAME_WIDTH);
+            let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+            let _ = writeln!(self.writer, "{}", line);
+        }
+    }
+
     /// Print pre-formatted markdown text with ledger layout
     fn print_markdown<F>(&mut self, name: &str, style: F, text: &str)
     where
@@ -163,8 +173,15 @@ impl<W: Write + ?Sized> OutputFormatter for LedgerFormatter<'_, W> {
 
     fn format_tool_result(&mut self, content: Option<&serde_json::Value>) {
         self.print_lines("Tool", |s| s.custom_color(DIM_TEAL), "<Result>");
-        let content_str = format_tool_content(content);
-        self.print_continuation(&content_str);
+        match content {
+            Some(serde_json::Value::String(s)) => {
+                self.print_markdown_continuation(s);
+            }
+            _ => {
+                let content_str = format_tool_content(content);
+                self.print_continuation(&content_str);
+            }
+        }
     }
 
     fn format_thinking(&mut self, thought: &str) {
