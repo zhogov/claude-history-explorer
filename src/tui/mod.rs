@@ -5,3 +5,4 @@ mod ui;
 pub mod viewer;
 
 pub use app::{Action, run, run_with_loader};
+pub use viewer::{RenderOptions, render_conversation};

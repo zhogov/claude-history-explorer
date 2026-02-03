@@ -22,6 +22,8 @@ pub struct DisplayOptions {
     pub debug_level: Option<DebugLevel>,
     /// Use a pager for output (less/more)
     pub use_pager: bool,
+    /// Disable colored output
+    pub no_color: bool,
 }
 
 const NAME_WIDTH: usize = 9;
@@ -509,4 +511,78 @@ fn process_assistant_message<F: OutputFormatter>(
     if printed_content {
         formatter.end_message();
     }
+}
+
+/// Render a conversation in TUI ledger format to terminal (for debugging)
+pub fn render_to_terminal(file_path: &Path, options: &DisplayOptions) -> Result<()> {
+    use crate::tui::{RenderOptions, render_conversation};
+
+    let terminal_width = get_terminal_width();
+    let content_width = terminal_width.saturating_sub(NAME_WIDTH + SEPARATOR_WIDTH);
+
+    let render_options = RenderOptions {
+        show_tools: !options.no_tools,
+        show_thinking: options.show_thinking,
+        content_width,
+    };
+
+    let rendered_lines = render_conversation(file_path, &render_options)?;
+
+    // Spawn pager if requested
+    let mut pager_child = if options.use_pager {
+        pager::spawn_pager().ok()
+    } else {
+        None
+    };
+
+    // Get writer - either pager stdin or stdout
+    let mut stdout_handle = io::stdout().lock();
+    let writer: &mut dyn Write = if let Some(ref mut child) = pager_child {
+        child.stdin.as_mut().unwrap()
+    } else {
+        &mut stdout_handle
+    };
+
+    // Convert RenderedLine spans to colored terminal output
+    'outer: for line in &rendered_lines {
+        for (text, style) in &line.spans {
+            // Apply styling only if colors are enabled
+            let output: Box<dyn std::fmt::Display> = if options.no_color {
+                Box::new(text.as_str())
+            } else {
+                let mut styled = text.as_str().normal();
+
+                if let Some((r, g, b)) = style.fg {
+                    styled = styled.custom_color(CustomColor { r, g, b });
+                }
+                if style.bold {
+                    styled = styled.bold();
+                }
+                if style.dimmed {
+                    styled = styled.dimmed();
+                }
+                if style.italic {
+                    styled = styled.italic();
+                }
+
+                Box::new(styled)
+            };
+
+            // Stop if the output pipe is closed (e.g., pager quit)
+            if write!(writer, "{}", output).is_err() {
+                break 'outer;
+            }
+        }
+        if writeln!(writer).is_err() {
+            break;
+        }
+    }
+
+    // Close stdin and wait for pager to finish
+    drop(stdout_handle);
+    if let Some(mut child) = pager_child {
+        let _ = child.wait();
+    }
+
+    Ok(())
 }

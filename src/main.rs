@@ -89,6 +89,18 @@ fn run() -> Result<()> {
         std::io::stdout().is_terminal(),
     );
 
+    // Handle --render flag: render a JSONL file in ledger format and exit
+    if let Some(ref render_path) = args.render {
+        let display_options = display::DisplayOptions {
+            no_tools: !show_tools,
+            show_thinking,
+            debug_level: args.debug,
+            use_pager,
+            no_color: args.no_color,
+        };
+        return display::render_to_terminal(render_path, &display_options);
+    }
+
     // Determine how to load conversations based on mode
     let (conversations, selected_path) = if args.global {
         // Global Search (-g) - use streaming loader for instant startup
@@ -205,6 +217,7 @@ fn run() -> Result<()> {
         show_thinking,
         debug_level: args.debug,
         use_pager,
+        no_color: false, // Regular display uses the colored crate which handles this automatically
     };
 
     if plain_mode {

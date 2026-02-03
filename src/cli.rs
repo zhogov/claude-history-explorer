@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 /// Log level for debug output filtering
@@ -124,4 +125,16 @@ pub struct Args {
     /// Disable pager output
     #[arg(long, group = "pager_display")]
     pub no_pager: bool,
+
+    /// Render a JSONL file in ledger format and exit (for debugging)
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Render a JSONL file in ledger format and exit"
+    )]
+    pub render: Option<PathBuf>,
+
+    /// Disable colored output (for --render)
+    #[arg(long, help = "Disable colored output")]
+    pub no_color: bool,
 }

@@ -130,6 +130,8 @@ Options:
       --plain            Output plain text without ledger formatting
       --debug [<LEVEL>]  Print debug information (filter by level: debug, info, warn, error)
   -g, --global           Search all conversations from all projects at once
+      --render <FILE>    Render a JSONL file in ledger format and exit
+      --no-color         Disable colored output
       --pager            Display output through a pager (less)
       --no-pager         Disable pager output
   -h, --help             Print help
