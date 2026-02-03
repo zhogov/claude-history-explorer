@@ -94,7 +94,7 @@ fn run() -> Result<()> {
         // Global Search (-g) - use streaming loader for instant startup
         let rx = history::load_all_conversations_streaming(show_last, args.debug);
 
-        match tui::run_with_loader(rx, use_relative_time)? {
+        match tui::run_with_loader(rx, use_relative_time, show_tools, show_thinking)? {
             (tui::Action::Select(path), convs) => (convs, path),
             (tui::Action::Resume(path), convs) => {
                 let conv = convs.iter().find(|c| c.path == path);
@@ -134,7 +134,12 @@ fn run() -> Result<()> {
             return Err(AppError::NoHistoryFound("selected scope".to_string()));
         }
 
-        match tui::run(conversations.clone(), use_relative_time)? {
+        match tui::run(
+            conversations.clone(),
+            use_relative_time,
+            show_tools,
+            show_thinking,
+        )? {
             tui::Action::Select(path) => (conversations, path),
             tui::Action::Resume(path) => {
                 let conv = conversations.iter().find(|c| c.path == path);

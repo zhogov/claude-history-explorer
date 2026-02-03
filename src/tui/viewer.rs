@@ -104,16 +104,17 @@ fn render_user_message(
 
     // Tool results (if enabled)
     if options.show_tools
-        && let UserContent::Blocks(blocks) = &message.content {
-            for block in blocks {
-                if let ContentBlock::ToolResult { content, .. } = block {
-                    render_ledger_block_plain(lines, "Tool", DIM_TEAL, false, "<Result>");
-                    let content_str = format_tool_result_content(content.as_ref());
-                    render_continuation(lines, &content_str);
-                    printed = true;
-                }
+        && let UserContent::Blocks(blocks) = &message.content
+    {
+        for block in blocks {
+            if let ContentBlock::ToolResult { content, .. } = block {
+                render_ledger_block_plain(lines, "Tool", DIM_TEAL, false, "<Result>");
+                let content_str = format_tool_result_content(content.as_ref());
+                render_continuation(lines, &content_str);
+                printed = true;
             }
         }
+    }
 
     if printed {
         lines.push(RenderedLine { spans: vec![] }); // Empty line after message

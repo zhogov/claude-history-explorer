@@ -138,11 +138,20 @@ pub struct App {
     app_mode: AppMode,
     /// Status message with timestamp for auto-clear
     status_message: Option<(String, std::time::Instant)>,
+    /// Persistent view setting: whether to show tool calls
+    show_tools: bool,
+    /// Persistent view setting: whether to show thinking blocks
+    show_thinking: bool,
 }
 
 impl App {
     /// Create a new app with all conversations pre-loaded (existing behavior)
-    pub fn new(conversations: Vec<Conversation>, use_relative_time: bool) -> Self {
+    pub fn new(
+        conversations: Vec<Conversation>,
+        use_relative_time: bool,
+        show_tools: bool,
+        show_thinking: bool,
+    ) -> Self {
         let searchable = search::precompute_search_text(&conversations);
         let filtered: Vec<usize> = (0..conversations.len()).collect();
         let selected = if filtered.is_empty() { None } else { Some(0) };
@@ -160,11 +169,13 @@ impl App {
             dialog_mode: DialogMode::None,
             app_mode: AppMode::List,
             status_message: None,
+            show_tools,
+            show_thinking,
         }
     }
 
     /// Create a new app in loading state
-    pub fn new_loading(use_relative_time: bool) -> Self {
+    pub fn new_loading(use_relative_time: bool, show_tools: bool, show_thinking: bool) -> Self {
         Self {
             conversations: Vec::new(),
             searchable: Vec::new(),
@@ -178,6 +189,8 @@ impl App {
             dialog_mode: DialogMode::None,
             app_mode: AppMode::List,
             status_message: None,
+            show_tools,
+            show_thinking,
         }
     }
 
@@ -979,8 +992,8 @@ impl App {
         let path = self.conversations[conv_idx].path.clone();
 
         let options = RenderOptions {
-            show_tools: false,
-            show_thinking: false,
+            show_tools: self.show_tools,
+            show_thinking: self.show_thinking,
             content_width,
         };
 
@@ -992,8 +1005,8 @@ impl App {
                     scroll_offset: 0,
                     rendered_lines,
                     total_lines,
-                    show_tools: false,
-                    show_thinking: false,
+                    show_tools: self.show_tools,
+                    show_thinking: self.show_thinking,
                     content_width,
                     search_mode: ViewSearchMode::Off,
                     search_query: String::new(),
@@ -1093,6 +1106,7 @@ impl App {
     fn toggle_view_tools(&mut self, viewport_height: usize) {
         if let AppMode::View(ref mut state) = self.app_mode {
             state.show_tools = !state.show_tools;
+            self.show_tools = state.show_tools; // Persist at app level
             self.re_render_view(viewport_height);
         }
     }
@@ -1101,6 +1115,7 @@ impl App {
     fn toggle_view_thinking(&mut self, viewport_height: usize) {
         if let AppMode::View(ref mut state) = self.app_mode {
             state.show_thinking = !state.show_thinking;
+            self.show_thinking = state.show_thinking; // Persist at app level
             self.re_render_view(viewport_height);
         }
     }
@@ -1203,7 +1218,12 @@ impl Drop for TerminalGuard {
 const NAME_WIDTH: usize = 9;
 
 /// Run the TUI and return the selected conversation path or None if cancelled
-pub fn run(conversations: Vec<Conversation>, use_relative_time: bool) -> Result<Action> {
+pub fn run(
+    conversations: Vec<Conversation>,
+    use_relative_time: bool,
+    show_tools: bool,
+    show_thinking: bool,
+) -> Result<Action> {
     // Set up panic hook to restore terminal
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -1213,7 +1233,7 @@ pub fn run(conversations: Vec<Conversation>, use_relative_time: bool) -> Result<
     }));
 
     let mut guard = TerminalGuard::new()?;
-    let mut app = App::new(conversations, use_relative_time);
+    let mut app = App::new(conversations, use_relative_time, show_tools, show_thinking);
 
     loop {
         let frame_area = guard.terminal.get_frame().area();
@@ -1282,6 +1302,8 @@ pub fn run(conversations: Vec<Conversation>, use_relative_time: bool) -> Result<
 pub fn run_with_loader(
     rx: Receiver<LoaderMessage>,
     use_relative_time: bool,
+    show_tools: bool,
+    show_thinking: bool,
 ) -> Result<(Action, Vec<Conversation>)> {
     // Set up panic hook to restore terminal
     let original_hook = std::panic::take_hook();
@@ -1292,7 +1314,7 @@ pub fn run_with_loader(
     }));
 
     let mut guard = TerminalGuard::new()?;
-    let mut app = App::new_loading(use_relative_time);
+    let mut app = App::new_loading(use_relative_time, show_tools, show_thinking);
 
     loop {
         // Process all pending loader messages (non-blocking)
