@@ -57,6 +57,7 @@ preview.
 | `Home` / `End`          | Jump to first/last              |
 | `Enter`                 | Open conversation viewer        |
 | `Ctrl+O`                | Select and exit (for scripting) |
+| `Ctrl+W`                | Delete word before cursor       |
 | `Ctrl+R`                | Resume conversation             |
 | `Ctrl+D`                | Delete conversation             |
 | `Esc` / `Ctrl+C`        | Quit                            |

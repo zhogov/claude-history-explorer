@@ -393,6 +393,50 @@ impl App {
         }
     }
 
+    /// Delete the word before the cursor (Ctrl+W behavior).
+    /// Returns true if the query was modified.
+    fn delete_word_backwards(&mut self) -> bool {
+        if self.cursor_pos == 0 {
+            return false;
+        }
+
+        let chars: Vec<char> = self.query.chars().collect();
+        let mut new_pos = self.cursor_pos;
+
+        // First, consume any separators to the left of cursor
+        while new_pos > 0 && search::is_word_separator(chars[new_pos - 1]) {
+            new_pos -= 1;
+        }
+
+        // Then, consume non-separators (the actual word)
+        while new_pos > 0 && !search::is_word_separator(chars[new_pos - 1]) {
+            new_pos -= 1;
+        }
+
+        if new_pos == self.cursor_pos {
+            return false;
+        }
+
+        // Convert char indices to byte indices for safe string manipulation
+        let start_byte = self
+            .query
+            .char_indices()
+            .nth(new_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        let end_byte = self
+            .query
+            .char_indices()
+            .nth(self.cursor_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(self.query.len());
+
+        self.query.replace_range(start_byte..end_byte, "");
+        self.cursor_pos = new_pos;
+        true
+    }
+
     /// Remove the currently selected conversation from the UI list.
     /// This should only be called after the file has been successfully deleted from disk.
     /// Handles index management for conversations, searchable, and filtered vectors.
@@ -833,6 +877,12 @@ impl App {
                     self.select_page_down();
                     None
                 }
+                KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.delete_word_backwards() {
+                        self.refresh_query_words();
+                    }
+                    None
+                }
                 // Allow typing during loading - query is buffered for when loading finishes
                 KeyCode::Char(c) => {
                     // Insert at cursor position
@@ -933,6 +983,12 @@ impl App {
             // Ctrl+O - select and exit (for scripting, --show-path)
             KeyCode::Char('o') if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.get_selected_path().map(Action::Select)
+            }
+            KeyCode::Char('w') if modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.delete_word_backwards() {
+                    self.update_filter();
+                }
+                None
             }
             KeyCode::Char(c) => {
                 // Insert at cursor position
