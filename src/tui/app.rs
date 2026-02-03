@@ -396,12 +396,13 @@ impl App {
     /// Delete the word before the cursor (Ctrl+W behavior).
     /// Returns true if the query was modified.
     fn delete_word_backwards(&mut self) -> bool {
-        if self.cursor_pos == 0 {
+        let chars: Vec<char> = self.query.chars().collect();
+        let cursor = self.cursor_pos.min(chars.len());
+        if cursor == 0 {
             return false;
         }
 
-        let chars: Vec<char> = self.query.chars().collect();
-        let mut new_pos = self.cursor_pos;
+        let mut new_pos = cursor;
 
         // First, consume any separators to the left of cursor
         while new_pos > 0 && search::is_word_separator(chars[new_pos - 1]) {
@@ -413,7 +414,7 @@ impl App {
             new_pos -= 1;
         }
 
-        if new_pos == self.cursor_pos {
+        if new_pos == cursor {
             return false;
         }
 
@@ -428,7 +429,7 @@ impl App {
         let end_byte = self
             .query
             .char_indices()
-            .nth(self.cursor_pos)
+            .nth(cursor)
             .map(|(i, _)| i)
             .unwrap_or(self.query.len());
 
