@@ -5,6 +5,7 @@ use crate::debug_log;
 use crate::error::Result;
 use crate::markdown::render_markdown;
 use crate::pager;
+use crate::tool_format;
 use colored::{ColoredString, Colorize, CustomColor};
 use crossterm::terminal;
 use std::fs::File;
@@ -45,6 +46,22 @@ const SEPARATOR_COLOR: CustomColor = CustomColor {
     r: 80,
     g: 80,
     b: 80,
+};
+// Colors for tool formatting
+const TOOL_TEXT: CustomColor = CustomColor {
+    r: 140,
+    g: 145,
+    b: 150,
+};
+const DIFF_ADD: CustomColor = CustomColor {
+    r: 120,
+    g: 200,
+    b: 120,
+};
+const DIFF_REMOVE: CustomColor = CustomColor {
+    r: 220,
+    g: 120,
+    b: 120,
 };
 
 /// Trait for formatting conversation output
@@ -126,13 +143,18 @@ impl<'a, W: Write + ?Sized> LedgerFormatter<'a, W> {
         }
     }
 
-    /// Print pre-formatted markdown text as continuation lines (no dimming)
-    fn print_markdown_continuation(&mut self, text: &str) {
-        let rendered = render_markdown(text, self.content_width);
-        for line in rendered.lines() {
+    /// Print tool body with diff-aware coloring
+    fn print_tool_body(&mut self, text: &str) {
+        for line in text.lines() {
             let _ = write!(self.writer, "{:>width$}", "", width = NAME_WIDTH);
             let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
-            let _ = writeln!(self.writer, "{}", line);
+            if line.starts_with("+ ") {
+                let _ = writeln!(self.writer, "{}", line.custom_color(DIFF_ADD));
+            } else if line.starts_with("- ") {
+                let _ = writeln!(self.writer, "{}", line.custom_color(DIFF_REMOVE));
+            } else {
+                let _ = writeln!(self.writer, "{}", line.dimmed());
+            }
         }
     }
 
@@ -176,24 +198,34 @@ impl<W: Write + ?Sized> OutputFormatter for LedgerFormatter<'_, W> {
     }
 
     fn format_tool_call(&mut self, name: &str, input: &serde_json::Value) {
-        let tool_header = format!("<Calling: {}>", name);
-        self.print_lines("Claude", |s| s.custom_color(DIM_TEAL), &tool_header);
-        if let Ok(formatted_input) = serde_json::to_string_pretty(input) {
-            self.print_continuation(&formatted_input);
+        let formatted = tool_format::format_tool_call(name, input);
+
+        // Print the header with appropriate styling
+        let padded_name = format!("{:>width$}", "Claude", width = NAME_WIDTH);
+        let _ = write!(self.writer, "{}", padded_name.custom_color(DIM_TEAL));
+        let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+
+        // Print the header in subtle gray
+        let _ = writeln!(self.writer, "{}", formatted.header.custom_color(TOOL_TEXT));
+
+        // Print the body if present, with empty line separator
+        if let Some(body) = formatted.body {
+            // Empty line between header and body
+            let _ = write!(self.writer, "{:>width$}", "", width = NAME_WIDTH);
+            let _ = writeln!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+            self.print_tool_body(&body);
         }
     }
 
     fn format_tool_result(&mut self, content: Option<&serde_json::Value>) {
-        self.print_lines("Tool", |s| s.custom_color(DIM_TEAL), "<Result>");
-        match content {
-            Some(serde_json::Value::String(s)) => {
-                self.print_markdown_continuation(s);
-            }
-            _ => {
-                let content_str = format_tool_content(content);
-                self.print_continuation(&content_str);
-            }
-        }
+        // Render markdown for string content, otherwise format as JSON
+        let rendered = match content {
+            Some(serde_json::Value::String(s)) => render_markdown(s, self.content_width),
+            _ => format_tool_content(content),
+        };
+
+        // Print with ↳ Result label
+        self.print_markdown("↳ Result", |s| s.custom_color(TOOL_TEXT), &rendered);
     }
 
     fn format_thinking(&mut self, thought: &str) {
@@ -217,11 +249,24 @@ impl<W: Write + ?Sized> OutputFormatter for LedgerFormatter<'_, W> {
     }
 
     fn format_agent_tool_call(&mut self, agent_id: &str, name: &str, input: &serde_json::Value) {
-        let tool_header = format!("<Calling: {}>", name);
+        let formatted = tool_format::format_tool_call(name, input);
         let label = format!("↳{}", short_agent_id(agent_id));
-        self.print_lines(&label, |s| s.custom_color(DIM_TEAL).dimmed(), &tool_header);
-        if let Ok(formatted_input) = serde_json::to_string_pretty(input) {
-            self.print_continuation(&formatted_input);
+
+        // Print the header with appropriate styling (dimmed for subagents)
+        let padded_name = format!("{:>width$}", label, width = NAME_WIDTH);
+        let _ = write!(
+            self.writer,
+            "{}",
+            padded_name.custom_color(DIM_TEAL).dimmed()
+        );
+        let _ = write!(self.writer, "{}", SEPARATOR.custom_color(SEPARATOR_COLOR));
+
+        // Print the header - dimmed for subagents
+        let _ = writeln!(self.writer, "{}", formatted.header.dimmed());
+
+        // Print the body if present
+        if let Some(body) = formatted.body {
+            self.print_continuation(&body);
         }
     }
 
@@ -249,9 +294,12 @@ impl OutputFormatter for PlainFormatter {
     }
 
     fn format_tool_call(&mut self, name: &str, input: &serde_json::Value) {
-        println!("Claude: <Calling: {}>", name);
-        if let Ok(formatted_input) = serde_json::to_string_pretty(input) {
-            println!("{}", formatted_input);
+        let formatted = tool_format::format_tool_call(name, input);
+        println!("Claude: {}", formatted.header);
+        if let Some(body) = formatted.body {
+            for line in body.lines() {
+                println!("  {}", line);
+            }
         }
     }
 
@@ -278,13 +326,14 @@ impl OutputFormatter for PlainFormatter {
     }
 
     fn format_agent_tool_call(&mut self, agent_id: &str, name: &str, input: &serde_json::Value) {
+        let formatted = tool_format::format_tool_call(name, input);
         println!(
-            "  [{}] Agent: <Calling: {}>",
+            "  [{}] Agent: {}",
             short_agent_id(agent_id),
-            name
+            formatted.header
         );
-        if let Ok(formatted_input) = serde_json::to_string_pretty(input) {
-            for line in formatted_input.lines() {
+        if let Some(body) = formatted.body {
+            for line in body.lines() {
                 println!("    {}", line);
             }
         }

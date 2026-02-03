@@ -5,6 +5,7 @@
 //! without using ANSI escape codes.
 
 use crate::claude::{AssistantMessage, ContentBlock, LogEntry, UserContent};
+use crate::tool_format;
 use crate::tui::app::{LineStyle, RenderedLine};
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use std::fs::File;
@@ -21,6 +22,10 @@ const GREEN: (u8, u8, u8) = (0, 255, 0);
 const BLUE: (u8, u8, u8) = (100, 149, 237);
 const THINKING_TEXT: (u8, u8, u8) = (140, 145, 150);
 const HEADING_COLOR: (u8, u8, u8) = (180, 190, 200);
+// Colors for tool formatting
+const TOOL_TEXT: (u8, u8, u8) = (140, 145, 150);
+const DIFF_ADD: (u8, u8, u8) = (120, 200, 120);
+const DIFF_REMOVE: (u8, u8, u8) = (220, 120, 120);
 
 /// Options for rendering a conversation
 pub struct RenderOptions {
@@ -115,16 +120,11 @@ fn render_user_message(
     {
         for block in blocks {
             if let ContentBlock::ToolResult { content, .. } = block {
-                render_ledger_block_plain(lines, "Tool", DIM_TEAL, false, "<Result>");
-                match extract_tool_result_text(content.as_ref()) {
-                    Some(text) => {
-                        render_markdown_continuation(lines, &text, options.content_width);
-                    }
-                    None => {
-                        let content_str = format_tool_result_content(content.as_ref());
-                        render_continuation(lines, &content_str);
-                    }
-                }
+                let content_str = match extract_tool_result_text(content.as_ref()) {
+                    Some(text) => text,
+                    None => format_tool_result_content(content.as_ref()),
+                };
+                render_tool_result(lines, &content_str, options.content_width);
                 printed = true;
             }
         }
@@ -191,11 +191,7 @@ fn render_assistant_message(
     if options.show_tools {
         for block in &message.content {
             if let ContentBlock::ToolUse { name, input, .. } = block {
-                let header = format!("<Calling: {}>", name);
-                render_ledger_block_plain(lines, "Claude", DIM_TEAL, false, &header);
-                if let Ok(formatted) = serde_json::to_string_pretty(input) {
-                    render_continuation(lines, &formatted);
-                }
+                render_tool_call(lines, name, input, "Claude", DIM_TEAL, false);
                 printed = true;
             }
         }
@@ -656,83 +652,143 @@ fn render_ledger_block_styled(
     }
 }
 
-/// Render ledger block with plain text (no markdown)
-fn render_ledger_block_plain(
+/// Render a formatted tool call with proper styling
+fn render_tool_call(
     lines: &mut Vec<RenderedLine>,
     name: &str,
-    color: (u8, u8, u8),
-    bold: bool,
-    text: &str,
+    input: &serde_json::Value,
+    label: &str,
+    label_color: (u8, u8, u8),
+    dimmed: bool,
 ) {
-    for (i, line_text) in text.lines().enumerate() {
+    let formatted = tool_format::format_tool_call(name, input);
+
+    let mut spans = Vec::new();
+
+    // Name column
+    spans.push((
+        format!("{:>width$}", label, width = NAME_WIDTH),
+        LineStyle {
+            fg: Some(label_color),
+            bold: false,
+            dimmed,
+            italic: false,
+        },
+    ));
+
+    // Separator
+    spans.push((
+        " │ ".to_string(),
+        LineStyle {
+            fg: Some(SEPARATOR_COLOR),
+            dimmed,
+            ..Default::default()
+        },
+    ));
+
+    // Print the header in subtle gray
+    spans.push((
+        formatted.header.clone(),
+        LineStyle {
+            fg: Some(TOOL_TEXT),
+            dimmed,
+            ..Default::default()
+        },
+    ));
+
+    lines.push(RenderedLine { spans });
+
+    // Render the body if present, with empty line separator
+    if let Some(body) = formatted.body {
+        // Empty line between header and body
+        lines.push(RenderedLine {
+            spans: vec![
+                (" ".repeat(NAME_WIDTH), LineStyle::default()),
+                (
+                    " │ ".to_string(),
+                    LineStyle {
+                        fg: Some(SEPARATOR_COLOR),
+                        dimmed,
+                        ..Default::default()
+                    },
+                ),
+            ],
+        });
+        render_tool_body(lines, &body, dimmed);
+    }
+}
+
+/// Render tool body with diff-aware coloring
+fn render_tool_body(lines: &mut Vec<RenderedLine>, text: &str, dimmed: bool) {
+    for line in text.lines() {
         let mut spans = Vec::new();
 
-        // Name column (right-aligned, only on first line)
-        let name_text = if i == 0 {
-            format!("{:>width$}", name, width = NAME_WIDTH)
-        } else {
-            " ".repeat(NAME_WIDTH)
-        };
-
-        spans.push((
-            name_text,
-            LineStyle {
-                fg: Some(color),
-                bold,
-                dimmed: false,
-                italic: false,
-            },
-        ));
+        // Empty name column
+        spans.push((" ".repeat(NAME_WIDTH), LineStyle::default()));
 
         // Separator
         spans.push((
             " │ ".to_string(),
             LineStyle {
                 fg: Some(SEPARATOR_COLOR),
+                dimmed,
                 ..Default::default()
             },
         ));
 
-        // Content
-        spans.push((line_text.to_string(), LineStyle::default()));
-
-        lines.push(RenderedLine { spans });
-    }
-}
-
-fn render_continuation(lines: &mut Vec<RenderedLine>, text: &str) {
-    for line_text in text.lines() {
-        let spans = vec![
-            (" ".repeat(NAME_WIDTH), LineStyle::default()),
-            (
-                " │ ".to_string(),
+        // Content with diff coloring
+        if line.starts_with("+ ") {
+            spans.push((
+                line.to_string(),
                 LineStyle {
-                    fg: Some(SEPARATOR_COLOR),
+                    fg: Some(DIFF_ADD),
+                    dimmed,
                     ..Default::default()
                 },
-            ),
-            (
-                line_text.to_string(),
+            ));
+        } else if line.starts_with("- ") {
+            spans.push((
+                line.to_string(),
+                LineStyle {
+                    fg: Some(DIFF_REMOVE),
+                    dimmed,
+                    ..Default::default()
+                },
+            ));
+        } else {
+            spans.push((
+                line.to_string(),
                 LineStyle {
                     dimmed: true,
                     ..Default::default()
                 },
-            ),
-        ];
+            ));
+        }
 
         lines.push(RenderedLine { spans });
     }
 }
 
-/// Render markdown content as continuation lines (no name column)
-fn render_markdown_continuation(lines: &mut Vec<RenderedLine>, text: &str, content_width: usize) {
+/// Render tool result with arrow indicator and markdown
+fn render_tool_result(lines: &mut Vec<RenderedLine>, text: &str, content_width: usize) {
+    // Render markdown
     let styled_lines = render_markdown_to_lines(text, content_width);
 
-    for styled_line in styled_lines {
+    for (i, styled_line) in styled_lines.iter().enumerate() {
         let mut spans = Vec::new();
 
-        // Empty name column
-        spans.push((" ".repeat(NAME_WIDTH), LineStyle::default()));
+        // First line gets the label, rest are empty
+        if i == 0 {
+            spans.push((
+                format!("{:>width$}", "↳ Result", width = NAME_WIDTH),
+                LineStyle {
+                    fg: Some(TOOL_TEXT),
+                    ..Default::default()
+                },
+            ));
+        } else {
+            spans.push((" ".repeat(NAME_WIDTH), LineStyle::default()));
+        }
 
         // Separator
         spans.push((
@@ -744,8 +800,8 @@ fn render_markdown_continuation(lines: &mut Vec<RenderedLine>, text: &str, conte
         ));
 
         // Content spans from markdown rendering
-        for (text, style) in styled_line.spans {
-            spans.push((text, style));
+        for (text, style) in &styled_line.spans {
+            spans.push((text.clone(), style.clone()));
         }
 
         lines.push(RenderedLine { spans });
@@ -833,12 +889,8 @@ fn render_agent_message(
             if options.show_tools {
                 for block in blocks {
                     if let ContentBlock::ToolUse { name, input, .. } = block {
-                        let header = format!("<Calling: {}>", name);
                         let label = format!("↳{}", short_id);
-                        render_ledger_block_plain_dimmed(lines, &label, DIM_TEAL, &header);
-                        if let Ok(formatted) = serde_json::to_string_pretty(input) {
-                            render_continuation_dimmed(lines, &formatted);
-                        }
+                        render_tool_call(lines, name, input, &label, DIM_TEAL, true);
                         printed = true;
                     }
                 }
