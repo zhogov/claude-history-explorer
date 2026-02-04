@@ -77,10 +77,10 @@ fn render_list_mode(frame: &mut Frame, app: &App) {
 
 fn render_status_message(frame: &mut Frame, msg: &str, area: Rect) {
     let status_line = Line::from(vec![
-        Span::raw(" "),
+        Span::raw("  "),
         Span::styled(msg, Style::default().fg(Color::Yellow)),
     ]);
-    let status = Paragraph::new(status_line);
+    let status = Paragraph::new(status_line).style(Style::default().bg(Color::Rgb(30, 30, 35)));
     frame.render_widget(status, area);
 }
 
