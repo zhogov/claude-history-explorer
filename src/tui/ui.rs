@@ -988,6 +988,13 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
                 format!("{} msgs", conv.message_count)
             };
 
+            // Format processing time (only if > 0)
+            let proc_time = if conv.total_processing_time_ms > 0 {
+                Some(format_duration_ms(conv.total_processing_time_ms))
+            } else {
+                None
+            };
+
             // Selection indicator: vertical bar for all rows (with left padding)
             let indicator = " ▌ ";
             let indicator_style = if is_selected {
@@ -1004,7 +1011,8 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_default();
 
             // Calculate right-side length first to determine available space for summary
-            let right_len = msg_count.chars().count() + 3 + timestamp.chars().count(); // 3 for " · "
+            let proc_time_len = proc_time.as_ref().map(|p| p.chars().count() + 3).unwrap_or(0); // 3 for " · "
+            let right_len = msg_count.chars().count() + proc_time_len + 3 + timestamp.chars().count(); // 3 for " · "
             let indicator_len = indicator.chars().count();
             let project_len = project_part.chars().count();
             let min_padding = 2; // Minimum padding between content and timestamp
@@ -1088,6 +1096,17 @@ fn render_list(frame: &mut Frame, app: &App, area: Rect) {
                 msg_count,
                 Style::default().fg(Color::Rgb(110, 110, 110)),
             ));
+            // Add processing time if present
+            if let Some(ref pt) = proc_time {
+                header_spans.push(Span::styled(
+                    " · ",
+                    Style::default().fg(Color::Rgb(70, 70, 70)),
+                ));
+                header_spans.push(Span::styled(
+                    pt.clone(),
+                    Style::default().fg(Color::Rgb(100, 140, 130)),
+                ));
+            }
             header_spans.push(Span::styled(
                 " · ",
                 Style::default().fg(Color::Rgb(70, 70, 70)),
