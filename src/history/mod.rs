@@ -58,6 +58,8 @@ pub struct Conversation {
     pub model: Option<String>,
     /// Total tokens used in the conversation (input + output + cache)
     pub total_tokens: u64,
+    /// Total Claude processing time in milliseconds (sum of turn_duration entries)
+    pub total_processing_time_ms: u64,
 }
 
 pub struct Project {

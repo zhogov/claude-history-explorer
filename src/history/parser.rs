@@ -56,6 +56,7 @@ pub(crate) fn process_conversation_reader<R: BufRead>(
     // Track token usage per message ID to avoid double-counting streaming entries
     let mut token_usage_by_msg: HashMap<String, TokenUsage> = HashMap::new();
     let mut anonymous_token_count: u64 = 0;
+    let mut total_processing_time_ms: u64 = 0;
 
     for (line_idx, line) in lines.iter().enumerate() {
         if line.trim().is_empty() {
@@ -136,6 +137,18 @@ pub(crate) fn process_conversation_reader<R: BufRead>(
                         // Extract summary from the first summary entry
                         if extracted_summary.is_none() {
                             extracted_summary = Some(summary.clone());
+                        }
+                    }
+                    LogEntry::System {
+                        subtype,
+                        duration_ms,
+                        ..
+                    } => {
+                        // Accumulate turn_duration entries
+                        if subtype == "turn_duration"
+                            && let Some(ms) = duration_ms
+                        {
+                            total_processing_time_ms += ms;
                         }
                     }
                     _ => {}
@@ -246,6 +259,7 @@ pub(crate) fn process_conversation_reader<R: BufRead>(
         summary: extracted_summary,
         model: extracted_model,
         total_tokens,
+        total_processing_time_ms,
     }))
 }
 
@@ -791,5 +805,45 @@ mod tests {
         let conv = parse_jsonl(&content).unwrap().unwrap();
         assert!(conv.model.is_none(), "Should have no model");
         assert_eq!(conv.total_tokens, 0, "Should have zero tokens");
+    }
+
+    // === Turn duration extraction ===
+
+    /// Helper to create a turn_duration system entry
+    fn turn_duration_entry(duration_ms: u64) -> String {
+        format!(
+            r#"{{"type": "system", "subtype": "turn_duration", "durationMs": {}, "timestamp": "2024-01-01T00:00:00Z"}}"#,
+            duration_ms
+        )
+    }
+
+    #[test]
+    fn extracts_turn_duration_from_system_entries() {
+        let content = [
+            user_msg("Hello", None),
+            assistant_msg("Hi there"),
+            turn_duration_entry(5000),
+            user_msg("How are you?", None),
+            assistant_msg("I'm good"),
+            turn_duration_entry(3000),
+        ]
+        .join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        assert_eq!(
+            conv.total_processing_time_ms, 8000,
+            "Should sum turn_duration entries: 5000 + 3000 = 8000"
+        );
+    }
+
+    #[test]
+    fn handles_conversation_without_turn_duration() {
+        let content = [user_msg("Hello", None), assistant_msg("Hi there")].join("\n");
+
+        let conv = parse_jsonl(&content).unwrap().unwrap();
+        assert_eq!(
+            conv.total_processing_time_ms, 0,
+            "Should be 0 when no turn_duration entries"
+        );
     }
 }

@@ -69,6 +69,8 @@ pub struct ViewState {
     pub show_tools: bool,
     /// Whether to show thinking blocks
     pub show_thinking: bool,
+    /// Whether to show timing information (timestamps + durations)
+    pub show_timing: bool,
     /// Content width used for rendering (for resize detection)
     pub content_width: usize,
     /// Search mode state
@@ -146,6 +148,8 @@ pub struct App {
     show_tools: bool,
     /// Persistent view setting: whether to show thinking blocks
     show_thinking: bool,
+    /// Persistent view setting: whether to show timing information
+    show_timing: bool,
     /// Whether the app is running in single file mode (direct input, no list)
     single_file_mode: bool,
 }
@@ -177,6 +181,7 @@ impl App {
             status_message: None,
             show_tools,
             show_thinking,
+            show_timing: false,
             single_file_mode: false,
         }
     }
@@ -198,6 +203,7 @@ impl App {
             status_message: None,
             show_tools,
             show_thinking,
+            show_timing: false,
             single_file_mode: false,
         }
     }
@@ -244,6 +250,7 @@ impl App {
                 total_lines: 0,
                 show_tools,
                 show_thinking,
+                show_timing: false,
                 content_width: 0,
                 search_mode: ViewSearchMode::Off,
                 search_query: String::new(),
@@ -253,6 +260,7 @@ impl App {
             status_message: None,
             show_tools,
             show_thinking,
+            show_timing: false,
             single_file_mode: true,
         }
     }
@@ -839,6 +847,12 @@ impl App {
                 None
             }
 
+            // Toggle timing (timestamps + durations)
+            KeyCode::Char('i') => {
+                self.toggle_view_timing(viewport_height);
+                None
+            }
+
             // Show path
             KeyCode::Char('p') => {
                 if let AppMode::View(ref state) = self.app_mode {
@@ -1207,6 +1221,7 @@ impl App {
         let options = RenderOptions {
             show_tools: self.show_tools,
             show_thinking: self.show_thinking,
+            show_timing: self.show_timing,
             content_width,
         };
 
@@ -1220,6 +1235,7 @@ impl App {
                     total_lines,
                     show_tools: self.show_tools,
                     show_thinking: self.show_thinking,
+                    show_timing: self.show_timing,
                     content_width,
                     search_mode: ViewSearchMode::Off,
                     search_query: String::new(),
@@ -1333,6 +1349,15 @@ impl App {
         }
     }
 
+    /// Toggle timing visibility in view mode (timestamps + durations)
+    fn toggle_view_timing(&mut self, viewport_height: usize) {
+        if let AppMode::View(ref mut state) = self.app_mode {
+            state.show_timing = !state.show_timing;
+            self.show_timing = state.show_timing; // Persist at app level
+            self.re_render_view(viewport_height);
+        }
+    }
+
     /// Re-render the view with current toggle settings
     fn re_render_view(&mut self, viewport_height: usize) {
         use crate::tui::viewer::{RenderOptions, render_conversation};
@@ -1341,6 +1366,7 @@ impl App {
             let options = RenderOptions {
                 show_tools: state.show_tools,
                 show_thinking: state.show_thinking,
+                show_timing: state.show_timing,
                 content_width: state.content_width,
             };
 

@@ -13,6 +13,8 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 const NAME_WIDTH: usize = 9;
+/// Width of timestamp prefix when timing is enabled (HH:MM + space)
+const TIMESTAMP_WIDTH: usize = 6;
 const WHITE: (u8, u8, u8) = (255, 255, 255);
 const TEAL: (u8, u8, u8) = (78, 201, 176);
 const DIM_TEAL: (u8, u8, u8) = (60, 160, 140);
@@ -31,7 +33,17 @@ const DIFF_REMOVE: (u8, u8, u8) = (220, 120, 120);
 pub struct RenderOptions {
     pub show_tools: bool,
     pub show_thinking: bool,
+    pub show_timing: bool,
     pub content_width: usize,
+}
+
+/// Format an ISO 8601 timestamp to HH:MM local time
+fn format_timestamp(iso_timestamp: &str) -> Option<String> {
+    use chrono::{DateTime, Local};
+    // Parse RFC 3339 timestamp (handles timezone offsets) and convert to local time
+    DateTime::parse_from_rfc3339(iso_timestamp)
+        .ok()
+        .map(|dt| dt.with_timezone(&Local).format("%H:%M").to_string())
 }
 
 /// Render a conversation file to lines for display in the TUI viewer
@@ -70,11 +82,25 @@ fn render_entry(lines: &mut Vec<RenderedLine>, entry: &LogEntry, options: &Rende
                 render_agent_message(lines, &agent_progress, options);
             }
         }
-        LogEntry::User { message, .. } => {
-            render_user_message(lines, message, options);
+        LogEntry::User {
+            message, timestamp, ..
+        } => {
+            let ts = if options.show_timing {
+                format_timestamp(timestamp)
+            } else {
+                None
+            };
+            render_user_message(lines, message, options, ts.as_deref());
         }
-        LogEntry::Assistant { message, .. } => {
-            render_assistant_message(lines, message, options);
+        LogEntry::Assistant {
+            message, timestamp, ..
+        } => {
+            let ts = if options.show_timing {
+                format_timestamp(timestamp)
+            } else {
+                None
+            };
+            render_assistant_message(lines, message, options, ts.as_deref());
         }
     }
 }
@@ -83,6 +109,7 @@ fn render_user_message(
     lines: &mut Vec<RenderedLine>,
     message: &crate::claude::UserMessage,
     options: &RenderOptions,
+    timestamp: Option<&str>,
 ) {
     let mut printed = false;
 
@@ -110,7 +137,7 @@ fn render_user_message(
 
     if let Some(text) = text {
         let md_lines = render_markdown_to_lines(&text, options.content_width);
-        render_ledger_block_styled(lines, "You", WHITE, true, md_lines);
+        render_ledger_block_styled(lines, "You", WHITE, true, md_lines, timestamp);
         printed = true;
     }
 
@@ -124,7 +151,12 @@ fn render_user_message(
                     Some(text) => text,
                     None => format_tool_result_content(content.as_ref()),
                 };
-                render_tool_result(lines, &content_str, options.content_width);
+                render_tool_result(
+                    lines,
+                    &content_str,
+                    options.content_width,
+                    options.show_timing,
+                );
                 printed = true;
             }
         }
@@ -175,15 +207,20 @@ fn render_assistant_message(
     lines: &mut Vec<RenderedLine>,
     message: &AssistantMessage,
     options: &RenderOptions,
+    timestamp: Option<&str>,
 ) {
     let mut printed = false;
+    let mut first_block = true;
 
     // Text blocks
     for block in &message.content {
         if let ContentBlock::Text { text } = block {
             let md_lines = render_markdown_to_lines(text, options.content_width);
-            render_ledger_block_styled(lines, "Claude", TEAL, true, md_lines);
+            // Only show timestamp on first block
+            let ts = if first_block { timestamp } else { None };
+            render_ledger_block_styled(lines, "Claude", TEAL, true, md_lines, ts);
             printed = true;
+            first_block = false;
         }
     }
 
@@ -199,6 +236,7 @@ fn render_assistant_message(
                     DIM_TEAL,
                     false,
                     options.content_width,
+                    options.show_timing,
                 );
                 printed = true;
             }
@@ -211,7 +249,20 @@ fn render_assistant_message(
             if let ContentBlock::Thinking { thinking, .. } = block {
                 let md_lines = render_markdown_to_lines(thinking, options.content_width);
                 let styled_lines = apply_thinking_style(md_lines);
-                render_ledger_block_styled(lines, "Thinking", DIM_TEAL, false, styled_lines);
+                // Pass blank timestamp for alignment when timing is on
+                let align_ts = if options.show_timing {
+                    Some("     ")
+                } else {
+                    None
+                };
+                render_ledger_block_styled(
+                    lines,
+                    "Thinking",
+                    DIM_TEAL,
+                    false,
+                    styled_lines,
+                    align_ts,
+                );
                 printed = true;
             }
         }
@@ -619,9 +670,28 @@ fn render_ledger_block_styled(
     color: (u8, u8, u8),
     bold: bool,
     styled_lines: Vec<StyledLine>,
+    timestamp: Option<&str>,
 ) {
     for (i, styled_line) in styled_lines.iter().enumerate() {
         let mut spans = Vec::new();
+
+        // Timestamp prefix (only on first line if provided)
+        if i == 0 {
+            if let Some(ts) = timestamp {
+                spans.push((
+                    format!("{} ", ts),
+                    LineStyle {
+                        fg: Some((140, 140, 140)),
+                        dimmed: false,
+                        bold: false,
+                        italic: false,
+                    },
+                ));
+            }
+        } else if timestamp.is_some() {
+            // Pad continuation lines to align with timestamped first line
+            spans.push((" ".repeat(TIMESTAMP_WIDTH), LineStyle::default()));
+        }
 
         // Name column (right-aligned, only on first line)
         let name_text = if i == 0 {
@@ -663,24 +733,37 @@ fn render_ledger_block_styled(
 
     // If no lines, still output at least the name
     if styled_lines.is_empty() {
-        let spans = vec![
-            (
-                format!("{:>width$}", name, width = NAME_WIDTH),
+        let mut spans = Vec::new();
+
+        // Timestamp prefix if provided
+        if let Some(ts) = timestamp {
+            spans.push((
+                format!("{} ", ts),
                 LineStyle {
-                    fg: Some(color),
-                    bold,
+                    fg: Some((140, 140, 140)),
                     dimmed: false,
+                    bold: false,
                     italic: false,
                 },
-            ),
-            (
-                " │ ".to_string(),
-                LineStyle {
-                    fg: Some(SEPARATOR_COLOR),
-                    ..Default::default()
-                },
-            ),
-        ];
+            ));
+        }
+
+        spans.push((
+            format!("{:>width$}", name, width = NAME_WIDTH),
+            LineStyle {
+                fg: Some(color),
+                bold,
+                dimmed: false,
+                italic: false,
+            },
+        ));
+        spans.push((
+            " │ ".to_string(),
+            LineStyle {
+                fg: Some(SEPARATOR_COLOR),
+                ..Default::default()
+            },
+        ));
         lines.push(RenderedLine { spans });
     }
 }
@@ -694,10 +777,16 @@ fn render_tool_call(
     label_color: (u8, u8, u8),
     dimmed: bool,
     content_width: usize,
+    show_timing: bool,
 ) {
     let formatted = tool_format::format_tool_call(name, input, content_width);
 
     let mut spans = Vec::new();
+
+    // Timing alignment padding (if timing is enabled)
+    if show_timing {
+        spans.push((" ".repeat(TIMESTAMP_WIDTH), LineStyle::default()));
+    }
 
     // Name column
     spans.push((
@@ -735,27 +824,33 @@ fn render_tool_call(
     // Render the body if present, with empty line separator
     if let Some(body) = formatted.body {
         // Empty line between header and body
-        lines.push(RenderedLine {
-            spans: vec![
-                (" ".repeat(NAME_WIDTH), LineStyle::default()),
-                (
-                    " │ ".to_string(),
-                    LineStyle {
-                        fg: Some(SEPARATOR_COLOR),
-                        dimmed,
-                        ..Default::default()
-                    },
-                ),
-            ],
-        });
-        render_tool_body(lines, &body, dimmed);
+        let mut empty_spans = Vec::new();
+        if show_timing {
+            empty_spans.push((" ".repeat(TIMESTAMP_WIDTH), LineStyle::default()));
+        }
+        empty_spans.push((" ".repeat(NAME_WIDTH), LineStyle::default()));
+        empty_spans.push((
+            " │ ".to_string(),
+            LineStyle {
+                fg: Some(SEPARATOR_COLOR),
+                dimmed,
+                ..Default::default()
+            },
+        ));
+        lines.push(RenderedLine { spans: empty_spans });
+        render_tool_body(lines, &body, dimmed, show_timing);
     }
 }
 
 /// Render tool body with diff-aware coloring
-fn render_tool_body(lines: &mut Vec<RenderedLine>, text: &str, dimmed: bool) {
+fn render_tool_body(lines: &mut Vec<RenderedLine>, text: &str, dimmed: bool, show_timing: bool) {
     for line in text.lines() {
         let mut spans = Vec::new();
+
+        // Timing alignment padding (if timing is enabled)
+        if show_timing {
+            spans.push((" ".repeat(TIMESTAMP_WIDTH), LineStyle::default()));
+        }
 
         // Empty name column
         spans.push((" ".repeat(NAME_WIDTH), LineStyle::default()));
@@ -804,12 +899,22 @@ fn render_tool_body(lines: &mut Vec<RenderedLine>, text: &str, dimmed: bool) {
 }
 
 /// Render tool result with arrow indicator and markdown
-fn render_tool_result(lines: &mut Vec<RenderedLine>, text: &str, content_width: usize) {
+fn render_tool_result(
+    lines: &mut Vec<RenderedLine>,
+    text: &str,
+    content_width: usize,
+    show_timing: bool,
+) {
     // Render markdown
     let styled_lines = render_markdown_to_lines(text, content_width);
 
     for (i, styled_line) in styled_lines.iter().enumerate() {
         let mut spans = Vec::new();
+
+        // Timing alignment padding (if timing is enabled)
+        if show_timing {
+            spans.push((" ".repeat(TIMESTAMP_WIDTH), LineStyle::default()));
+        }
 
         // First line gets the label, rest are empty
         if i == 0 {
@@ -932,6 +1037,7 @@ fn render_agent_message(
                             DIM_TEAL,
                             true,
                             options.content_width,
+                            options.show_timing,
                         );
                         printed = true;
                     }
@@ -1402,5 +1508,26 @@ mod tests {
         // Just verify it renders without panicking and contains the text
         assert!(result.contains("bold"));
         assert!(result.contains("italic"));
+    }
+
+    #[test]
+    fn test_format_timestamp() {
+        // UTC timestamp with Z suffix
+        let ts = "2026-02-04T19:46:38.440Z";
+        let result = format_timestamp(ts);
+        assert!(result.is_some(), "Should parse UTC timestamp");
+        let formatted = result.unwrap();
+        // Should be HH:MM format (local time)
+        assert_eq!(formatted.len(), 5, "Should be HH:MM format: {}", formatted);
+        assert!(
+            formatted.contains(':'),
+            "Should contain colon: {}",
+            formatted
+        );
+
+        // Timestamp with timezone offset
+        let ts2 = "2026-02-04T14:46:38-05:00";
+        let result2 = format_timestamp(ts2);
+        assert!(result2.is_some(), "Should parse timestamp with offset");
     }
 }

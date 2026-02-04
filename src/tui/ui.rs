@@ -89,6 +89,30 @@ fn format_tokens_long(tokens: u64) -> String {
     format!("{} tokens", format_tokens(tokens))
 }
 
+/// Format milliseconds as human-readable duration (e.g., "45s", "1m 23s", "2h 15m")
+fn format_duration_ms(ms: u64) -> String {
+    let secs = ms / 1000;
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s > 0 {
+            format!("{}m {}s", m, s)
+        } else {
+            format!("{}m", m)
+        }
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        if m > 0 {
+            format!("{}h {}m", h, m)
+        } else {
+            format!("{}h", h)
+        }
+    }
+}
+
 /// Render the TUI
 pub fn render(frame: &mut Frame, app: &App) {
     match app.app_mode() {
@@ -225,12 +249,20 @@ fn header_fits_single_line(conv: &crate::history::Conversation, terminal_width: 
     // timestamp is "YYYY-MM-DD HH:MM" = 16 chars
     let timestamp_len = 16;
 
-    // Format: "  project · model · msg_count · tokens · timestamp · summary"
+    // Processing time length (if present): " · Xs" or " · Xm Ys" etc.
+    let processing_time_len = if conv.total_processing_time_ms > 0 {
+        3 + format_duration_ms(conv.total_processing_time_ms).len() // " · " + duration
+    } else {
+        0
+    };
+
+    // Format: "  project · model · msg_count · processing_time · tokens · timestamp · summary"
     let total_len = 2
         + project.len()
         + 3
         + model_len
         + msg_count_len
+        + processing_time_len
         + 3
         + tokens_len
         + timestamp_len
@@ -300,7 +332,7 @@ fn render_view_header(frame: &mut Frame, app: &App, state: &ViewState, area: Rec
         .iter()
         .find(|c| c.path == state.conversation_path);
 
-    let (project, model, msg_count, tokens, timestamp, summary, fits_single) =
+    let (project, model, msg_count, processing_time, tokens, timestamp, summary, fits_single) =
         if let Some(conv) = conv {
             let project = conv.project_name.as_deref().unwrap_or("Unknown");
             let model = conv.model.as_ref().map(|m| format_model_name(m));
@@ -309,10 +341,16 @@ fn render_view_header(frame: &mut Frame, app: &App, state: &ViewState, area: Rec
             } else {
                 format!("{} messages", conv.message_count)
             };
+            let processing_time = if conv.total_processing_time_ms > 0 {
+                Some(format_duration_ms(conv.total_processing_time_ms))
+            } else {
+                None
+            };
 
             // Calculate header length to determine if long token format fits
             let model_len = model.as_ref().map(|m| m.len() + 3).unwrap_or(0); // + " · "
-            let base_len = 2 + project.len() + 3 + model_len + msg_count.len() + 3 + 16; // 16 = timestamp
+            let proc_time_len = processing_time.as_ref().map(|p| p.len() + 3).unwrap_or(0); // + " · "
+            let base_len = 2 + project.len() + 3 + model_len + msg_count.len() + proc_time_len + 3 + 16; // 16 = timestamp
 
             let tokens = if conv.total_tokens > 0 {
                 let long_form = format_tokens_long(conv.total_tokens);
@@ -333,6 +371,7 @@ fn render_view_header(frame: &mut Frame, app: &App, state: &ViewState, area: Rec
                 project.to_string(),
                 model,
                 msg_count,
+                processing_time,
                 tokens,
                 timestamp,
                 conv.summary.clone(),
@@ -350,6 +389,7 @@ fn render_view_header(frame: &mut Frame, app: &App, state: &ViewState, area: Rec
                 project,
                 None,
                 "".to_string(),
+                None,
                 None,
                 "".to_string(),
                 None,
@@ -381,6 +421,15 @@ fn render_view_header(frame: &mut Frame, app: &App, state: &ViewState, area: Rec
             msg_count.clone(),
             Style::default().fg(Color::Rgb(140, 140, 140)),
         ));
+
+        // Add processing time if present
+        if let Some(ref pt) = processing_time {
+            spans.push(Span::raw(" · "));
+            spans.push(Span::styled(
+                pt.clone(),
+                Style::default().fg(Color::Rgb(100, 140, 130)),
+            ));
+        }
 
         // Add tokens if present
         if let Some(ref t) = tokens {
@@ -496,6 +545,7 @@ fn render_view_status_bar(frame: &mut Frame, app: &App, state: &ViewState, area:
     // Fixed-width "on "/"off" to prevent jumping when toggling
     let tools_status = if state.show_tools { "on " } else { "off" };
     let thinking_status = if state.show_thinking { "on " } else { "off" };
+    let timing_status = if state.show_timing { "on " } else { "off" };
 
     let mut spans = vec![
         Span::raw("  "),
@@ -504,7 +554,9 @@ fn render_view_status_bar(frame: &mut Frame, app: &App, state: &ViewState, area:
         Span::styled("t", key_style),
         Span::styled(format!("ools·{} ", tools_status), label_style),
         Span::styled("T", key_style),
-        Span::styled(format!("hink·{}", thinking_status), label_style),
+        Span::styled(format!("hink·{} ", thinking_status), label_style),
+        Span::styled("i", key_style),
+        Span::styled(format!("nfo·{}", timing_status), label_style),
         Span::raw("  "),
         Span::styled("│", label_style),
         Span::raw("  "),
@@ -797,6 +849,7 @@ fn render_help_overlay(frame: &mut Frame, is_view_mode: bool, is_single_file_mod
             ("n / N", "Next / prev match"),
             ("t", "Toggle tool calls"),
             ("T", "Toggle thinking"),
+            ("i", "Toggle timing"),
             ("e", "Export to file"),
             ("y", "Copy to clipboard"),
             ("p", "Show file path"),

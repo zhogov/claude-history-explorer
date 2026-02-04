@@ -9,15 +9,21 @@ pub enum LogEntry {
     },
     User {
         message: UserMessage,
-        #[allow(dead_code)]
+        /// ISO 8601 timestamp when this message was sent
         timestamp: String,
+        /// UUID for linking with turn_duration entries
+        #[allow(dead_code)]
+        uuid: Option<String>,
         /// The working directory when this message was sent
         cwd: Option<String>,
     },
     Assistant {
         message: AssistantMessage,
-        #[allow(dead_code)]
+        /// ISO 8601 timestamp when this message was sent
         timestamp: String,
+        /// UUID for linking with turn_duration entries
+        #[allow(dead_code)]
+        uuid: Option<String>,
     },
     #[serde(rename = "file-history-snapshot")]
     #[allow(dead_code)]
@@ -38,6 +44,12 @@ pub enum LogEntry {
     System {
         subtype: String,
         level: Option<String>,
+        /// Duration in milliseconds for turn_duration entries
+        #[serde(rename = "durationMs")]
+        duration_ms: Option<u64>,
+        /// Parent UUID for linking turn_duration to preceding message
+        #[serde(rename = "parentUuid")]
+        parent_uuid: Option<String>,
         #[serde(flatten)]
         extra: serde_json::Value,
     },
