@@ -287,29 +287,55 @@ fn render_view_status_bar(frame: &mut Frame, app: &App, state: &ViewState, area:
         return;
     }
 
-    let scroll_pos = format!("[{}/{}]", state.scroll_offset + 1, state.total_lines.max(1));
+    // Fixed-width scroll position to prevent bar from jumping
+    // Use minimum width of 4 for both numbers to handle most conversations
+    let total = state.total_lines.max(1);
+    let width = total.to_string().len().max(4);
+    let scroll_pos = format!("[{:>width$}/{:<width$}]", state.scroll_offset + 1, total);
 
-    let tools_status = if state.show_tools { "on" } else { "off" };
-    let thinking_status = if state.show_thinking { "on" } else { "off" };
+    let key_style = Style::default().fg(Color::Rgb(78, 201, 176));
+    let label_style = Style::default().fg(Color::Rgb(100, 100, 100));
 
-    let hints = if state.search_mode == ViewSearchMode::Active {
-        "n:next N:prev Esc:clear"
-    } else {
-        "/:search e:export y:yank q:back"
-    };
+    // Fixed-width "on "/"off" to prevent jumping when toggling
+    let tools_status = if state.show_tools { "on " } else { "off" };
+    let thinking_status = if state.show_thinking { "on " } else { "off" };
 
-    let status_line = Line::from(vec![
+    let mut spans = vec![
         Span::raw("  "),
         Span::styled(scroll_pos, Style::default().fg(Color::Rgb(140, 140, 140))),
         Span::raw("  "),
-        Span::styled(
-            format!("t:{} T:{}", tools_status, thinking_status),
-            Style::default().fg(Color::Rgb(80, 80, 80)),
-        ),
+        Span::styled("t", key_style),
+        Span::styled(format!("ools·{} ", tools_status), label_style),
+        Span::styled("T", key_style),
+        Span::styled(format!("hink·{}", thinking_status), label_style),
         Span::raw("  "),
-        Span::styled(hints, Style::default().fg(Color::Rgb(80, 80, 80))),
-    ]);
+        Span::styled("│", label_style),
+        Span::raw("  "),
+    ];
 
+    if state.search_mode == ViewSearchMode::Active {
+        spans.extend([
+            Span::styled("n", key_style),
+            Span::styled("ext  ", label_style),
+            Span::styled("N", key_style),
+            Span::styled("prev  ", label_style),
+            Span::styled("Esc", key_style),
+            Span::styled(" clear", label_style),
+        ]);
+    } else {
+        spans.extend([
+            Span::styled("/", key_style),
+            Span::styled("search  ", label_style),
+            Span::styled("e", key_style),
+            Span::styled("xport  ", label_style),
+            Span::styled("y", key_style),
+            Span::styled("ank  ", label_style),
+            Span::styled("q", key_style),
+            Span::styled("uit", label_style),
+        ]);
+    }
+
+    let status_line = Line::from(spans);
     let status = Paragraph::new(status_line).style(Style::default().bg(Color::Rgb(30, 30, 35)));
     frame.render_widget(status, area);
 }
