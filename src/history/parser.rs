@@ -139,8 +139,10 @@ pub(crate) fn process_conversation_reader<R: BufRead>(
                                 token_usage_by_msg.insert(msg_id.clone(), usage.clone());
                             } else {
                                 // No message ID - accumulate directly (legacy format)
-                                // Only count input + output, not cache tokens
-                                anonymous_token_count += usage.input_tokens + usage.output_tokens;
+                                anonymous_token_count += usage.input_tokens
+                                    + usage.output_tokens
+                                    + usage.cache_creation_input_tokens
+                                    + usage.cache_read_input_tokens;
                             }
                         }
 
@@ -252,10 +254,15 @@ pub(crate) fn process_conversation_reader<R: BufRead>(
     let preview = normalize_whitespace(&preview);
     let full_text = normalize_whitespace(&full_text);
 
-    // Sum token usage from deduplicated messages (input + output only, not cache)
+    // Sum token usage from deduplicated messages (all token types)
     let total_tokens: u64 = token_usage_by_msg
         .values()
-        .map(|u| u.input_tokens + u.output_tokens)
+        .map(|u| {
+            u.input_tokens
+                + u.output_tokens
+                + u.cache_creation_input_tokens
+                + u.cache_read_input_tokens
+        })
         .sum::<u64>()
         + anonymous_token_count;
 
@@ -801,10 +808,10 @@ mod tests {
         .join("\n");
 
         let conv = parse_jsonl(&content).unwrap().unwrap();
-        // Total = (100+50) + (200+100) = 450 (only input + output, not cache)
+        // Total = (100+50+10+5) + (200+100+20+10) = 495 (all token types)
         assert_eq!(
-            conv.total_tokens, 450,
-            "Should accumulate input+output tokens from all assistant messages"
+            conv.total_tokens, 495,
+            "Should accumulate all token types from all assistant messages"
         );
     }
 

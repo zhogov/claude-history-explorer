@@ -86,12 +86,9 @@ pub struct TokenUsage {
     pub input_tokens: u64,
     #[serde(default)]
     pub output_tokens: u64,
-    // Cache fields kept for deserialization but not used in totals
     #[serde(default)]
-    #[allow(dead_code)]
     pub cache_creation_input_tokens: u64,
     #[serde(default)]
-    #[allow(dead_code)]
     pub cache_read_input_tokens: u64,
 }
 
