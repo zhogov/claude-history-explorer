@@ -66,6 +66,11 @@ pub fn render_conversation(
         }
     }
 
+    // Collapse consecutive empty lines into single empty lines.
+    // Multiple render functions each add trailing empty lines, which can
+    // result in double blanks when a tool result has empty output.
+    lines.dedup_by(|a, b| a.spans.is_empty() && b.spans.is_empty());
+
     Ok(lines)
 }
 
