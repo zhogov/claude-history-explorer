@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.1.20 (2026-02-05)
+
+- Added toggleable timing display in conversation viewer — press `i` to show
+  timestamps next to each message
+- Show conversation duration and model/token count in the viewer header
+- Show conversation duration in the conversation list
+- Added keyboard shortcuts help overlay — press `?` in any view
+- Added keyboard shortcuts bar at the bottom of the conversation list
+- Added `Ctrl+R` (resume) and `Ctrl+X` (delete) shortcuts to the viewer status
+  bar
+- Added `Ctrl+C` to quit from viewer mode
+- Exports now include thinking blocks and tool calls when their display is
+  toggled on
+- Long bash commands in tool calls are now wrapped for readability
+- Improved search highlight color for better visibility
+
 ## v0.1.19 (2026-02-04)
 
 - Added syntax highlighting for code blocks in conversation output
