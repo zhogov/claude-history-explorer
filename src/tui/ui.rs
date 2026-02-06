@@ -632,6 +632,11 @@ fn highlight_line_matches(
         let mut i = 0;
         while i + query_chars.len() <= lower_chars.len() {
             if lower_chars[i..i + query_chars.len()] == query_chars[..] {
+                // Guard against Unicode casing expansion (e.g. ß → ss) where
+                // lower_chars may be longer than orig_chars
+                if i >= orig_chars.len() {
+                    break;
+                }
                 let start_byte = orig_chars[i].0;
                 let end_byte = if i + query_chars.len() < orig_chars.len() {
                     orig_chars[i + query_chars.len()].0
@@ -735,20 +740,7 @@ fn build_style(style: &LineStyle) -> Style {
 }
 
 fn styled_span(text: &str, style: &LineStyle) -> Span<'static> {
-    let mut s = Style::default();
-    if let Some((r, g, b)) = style.fg {
-        s = s.fg(Color::Rgb(r, g, b));
-    }
-    if style.bold {
-        s = s.bold();
-    }
-    if style.italic {
-        s = s.italic();
-    }
-    if style.dimmed {
-        s = s.fg(Color::Rgb(100, 100, 100));
-    }
-    Span::styled(text.to_string(), s)
+    Span::styled(text.to_string(), build_style(style))
 }
 
 fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
