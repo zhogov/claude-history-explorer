@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.24 (2026-02-11)
+
+- Tool calls now default to **truncated** mode, showing the header and first few
+  lines with a "(N more lines...)" indicator — a middle ground between hidden
+  and full output. Press `t` to cycle through modes: off, truncated, full
+- Added `--no-tools` flag to start with tools hidden (complements `--show-tools`
+  for full mode)
+- Tables in conversation output are now rendered with proper box-drawing borders
+  instead of being collapsed into plain text
+
 ## v0.1.23 (2026-02-08)
 
 - Fixed blank or empty message blocks occasionally appearing in conversation
