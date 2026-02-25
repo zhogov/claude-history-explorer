@@ -1444,6 +1444,10 @@ fn build_context_segments(
         return None;
     }
 
+    // Normalize full_text once, reuse for all term lookups
+    let full_normalized = NormalizedText::new(full_text);
+    let preview_normalized = NormalizedText::new(preview);
+
     // Prioritize showing terms NOT already visible in the preview.
     // For each term, check if it has matches in the preview; if not,
     // find its first match in full_text and use that for context.
@@ -1451,15 +1455,11 @@ fn build_context_segments(
     let mut missing_term_matches: Vec<(usize, usize)> = Vec::new();
 
     for term in &terms {
-        let preview_has_term = !find_normalized_match_ranges(preview, term).is_empty();
-        if preview_has_term {
+        if !preview_normalized.find_term_ranges(term).is_empty() {
             continue;
         }
         // Term not in preview — find first match in full_text
-        if let Some(first) = find_normalized_match_ranges(full_text, term)
-            .into_iter()
-            .next()
-        {
+        if let Some(first) = full_normalized.find_term_ranges(term).into_iter().next() {
             missing_term_matches.push(first);
         }
     }
@@ -1467,8 +1467,8 @@ fn build_context_segments(
     // If all terms are already in preview, fall back to showing additional
     // matches beyond what the preview covers (original behavior)
     let raw_hidden = if missing_term_matches.is_empty() {
-        let preview_match_count = find_normalized_match_ranges(preview, query).len();
-        let all_matches = find_normalized_match_ranges(full_text, query);
+        let preview_match_count = preview_normalized.find_all_ranges(query).len();
+        let all_matches = full_normalized.find_all_ranges(query);
         if all_matches.len() <= preview_match_count {
             return None;
         }
@@ -1488,10 +1488,11 @@ fn build_context_segments(
     let mut hidden_matches: Vec<(usize, usize)> = Vec::new();
     for m in sorted {
         if let Some(last) = hidden_matches.last_mut()
-            && m.0 <= last.1 + merge_gap {
-                last.1 = last.1.max(m.1);
-                continue;
-            }
+            && m.0 <= last.1 + merge_gap
+        {
+            last.1 = last.1.max(m.1);
+            continue;
+        }
         hidden_matches.push(m);
     }
     hidden_matches.truncate(3); // cap at 3 clusters
@@ -1534,7 +1535,11 @@ fn build_context_segments(
         let sanitized = sanitize_preview(snippet);
 
         // Add ellipsis if there's a gap before this segment
-        let has_gap = if i == 0 { start_byte > 0 } else { start_byte > prev_end_byte };
+        let has_gap = if i == 0 {
+            start_byte > 0
+        } else {
+            start_byte > prev_end_byte
+        };
         if has_gap {
             result.push('…');
             remaining_width = remaining_width.saturating_sub(1);
@@ -1607,56 +1612,57 @@ fn sanitize_preview(text: &str) -> String {
     result.trim().to_string()
 }
 
-/// Split text into spans with matched portions highlighted (case-insensitive)
-/// Find all non-overlapping matches of `query_normalized` in `text` after normalizing `text`.
-/// Returns byte ranges in the original `text` for each match.
-fn find_normalized_match_ranges(text: &str, query_normalized: &str) -> Vec<(usize, usize)> {
-    let terms: Vec<&str> = query_normalized.split_whitespace().collect();
-    if terms.is_empty() {
-        return Vec::new();
-    }
+/// Pre-normalized text with char-to-byte mapping for efficient repeated searches.
+struct NormalizedText {
+    norm_chars: Vec<char>,
+    char_map: Vec<(usize, usize)>,
+}
 
-    // Normalize text char-by-char, keeping a mapping to original byte positions.
-    let mut norm_chars: Vec<char> = Vec::new();
-    let mut char_map: Vec<(usize, usize)> = Vec::new();
+impl NormalizedText {
+    fn new(text: &str) -> Self {
+        let mut norm_chars: Vec<char> = Vec::new();
+        let mut char_map: Vec<(usize, usize)> = Vec::new();
 
-    let mut iter = text.char_indices().peekable();
-    while let Some((byte_start, ch)) = iter.next() {
-        let byte_end = iter.peek().map_or(text.len(), |(i, _)| *i);
-        if ch == '_' {
-            norm_chars.push(' ');
-            char_map.push((byte_start, byte_end));
-        } else {
-            for lc in ch.to_lowercase() {
-                norm_chars.push(lc);
+        let mut iter = text.char_indices().peekable();
+        while let Some((byte_start, ch)) = iter.next() {
+            let byte_end = iter.peek().map_or(text.len(), |(i, _)| *i);
+            if ch == '_' {
+                norm_chars.push(' ');
                 char_map.push((byte_start, byte_end));
+            } else {
+                for lc in ch.to_lowercase() {
+                    norm_chars.push(lc);
+                    char_map.push((byte_start, byte_end));
+                }
             }
         }
+
+        Self {
+            norm_chars,
+            char_map,
+        }
     }
 
-    let mut all_matches = Vec::new();
-
-    for term in &terms {
+    /// Find all non-overlapping matches of a single term, with left word boundary.
+    fn find_term_ranges(&self, term: &str) -> Vec<(usize, usize)> {
         let query_chars: Vec<char> = term.chars().collect();
         if query_chars.is_empty() {
-            continue;
+            return Vec::new();
         }
 
-        // Only enforce left word boundary when the term starts with alnum.
-        // This gives prefix matching: "auth" matches "authentication" but
-        // "red" won't match inside "fired".
         let query_starts_alnum = query_chars.first().is_some_and(|c| c.is_alphanumeric());
+        let mut matches = Vec::new();
 
         let mut i = 0;
-        while i + query_chars.len() <= norm_chars.len() {
-            if norm_chars[i..i + query_chars.len()] == query_chars[..] {
-                let prev_is_alnum = i > 0 && norm_chars[i - 1].is_alphanumeric();
+        while i + query_chars.len() <= self.norm_chars.len() {
+            if self.norm_chars[i..i + query_chars.len()] == query_chars[..] {
+                let prev_is_alnum = i > 0 && self.norm_chars[i - 1].is_alphanumeric();
                 let valid_start = !query_starts_alnum || !prev_is_alnum;
 
                 if valid_start {
-                    let start_byte = char_map[i].0;
-                    let end_byte = char_map[i + query_chars.len() - 1].1;
-                    all_matches.push((start_byte, end_byte));
+                    let start_byte = self.char_map[i].0;
+                    let end_byte = self.char_map[i + query_chars.len() - 1].1;
+                    matches.push((start_byte, end_byte));
                     i += query_chars.len();
                 } else {
                     i += 1;
@@ -1665,22 +1671,43 @@ fn find_normalized_match_ranges(text: &str, query_normalized: &str) -> Vec<(usiz
                 i += 1;
             }
         }
+
+        matches
     }
 
-    // Sort and merge overlapping ranges
-    all_matches.sort_unstable_by_key(|m| m.0);
-    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(all_matches.len());
-    for m in all_matches {
-        if let Some(last) = merged.last_mut()
-            && m.0 <= last.1
-        {
-            last.1 = last.1.max(m.1);
-            continue;
+    /// Find all matches for a multi-word query, sorted and merged.
+    fn find_all_ranges(&self, query_normalized: &str) -> Vec<(usize, usize)> {
+        let terms: Vec<&str> = query_normalized.split_whitespace().collect();
+        if terms.is_empty() {
+            return Vec::new();
         }
-        merged.push(m);
-    }
 
-    merged
+        let mut all_matches = Vec::new();
+        for term in &terms {
+            all_matches.extend(self.find_term_ranges(term));
+        }
+
+        // Sort and merge overlapping ranges
+        all_matches.sort_unstable_by_key(|m| m.0);
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(all_matches.len());
+        for m in all_matches {
+            if let Some(last) = merged.last_mut()
+                && m.0 <= last.1
+            {
+                last.1 = last.1.max(m.1);
+                continue;
+            }
+            merged.push(m);
+        }
+
+        merged
+    }
+}
+
+/// Find all non-overlapping matches of `query_normalized` in `text` after normalizing `text`.
+/// Returns byte ranges in the original `text` for each match.
+fn find_normalized_match_ranges(text: &str, query_normalized: &str) -> Vec<(usize, usize)> {
+    NormalizedText::new(text).find_all_ranges(query_normalized)
 }
 
 fn highlight_text(
