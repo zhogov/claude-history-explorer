@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.27 (2026-02-26)
+
+- Session titles (set via `/rename` in Claude Code) now appear in the
+  conversation list and viewer, making it easier to find named sessions
+- Search preview shows matches better now
+
 ## v0.1.26 (2026-02-18)
 
 - Added `global = true` config option to default to global search without
